@@ -1,5 +1,6 @@
 "use client";
 
+/* eslint-disable @next/next/no-img-element */
 import { useMemo, useState } from "react";
 
 function sanitizeCode(content = "") {
@@ -85,68 +86,150 @@ ${appCode}
 </html>`;
 }
 
-export default function WebsitePreview({ files, title }) {
+function extractImageSources(appCode) {
+  const sources = new Set();
+  const patterns = [
+    /src\s*=\s*["']([^"']+)["']/gi,
+    /backgroundImage\s*:\s*["']url\(([^)]+)\)["']/gi,
+    /url\((['"]?)([^'")]+)\1\)/gi,
+  ];
+
+  for (const pattern of patterns) {
+    let match = pattern.exec(appCode);
+    while (match) {
+      const value = (match[2] || match[1] || "").trim().replace(/^['"]|['"]$/g, "");
+      if (value && /\.(jpg|jpeg|png|webp|avif|svg)(\?|$)/i.test(value)) {
+        sources.add(value);
+      }
+      match = pattern.exec(appCode);
+    }
+  }
+
+  return [...sources].map((src) => ({
+    src,
+    isRemote: /^https?:\/\//i.test(src),
+    isLocal: src.startsWith("/"),
+  }));
+}
+
+export default function WebsitePreview({ files, title, viewMode = "preview" }) {
   const [activeTab, setActiveTab] = useState("app");
   const { appCode, cssCode } = useMemo(() => getGeneratedCode(files), [files]);
   const srcDoc = useMemo(() => buildSrcDoc(appCode, cssCode), [appCode, cssCode]);
+  const imageSources = useMemo(() => extractImageSources(appCode), [appCode]);
   const activeCode = activeTab === "app" ? appCode : cssCode;
 
   return (
-    <section className="min-w-0 rounded-xl border border-slate-200 bg-white p-3 shadow-sm sm:p-4">
-      <div className="mb-3 flex flex-col gap-1 px-1 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-indigo-600">
-            Live project
-          </p>
-          <h2 className="truncate text-lg font-semibold text-slate-950">
-            {title || "Generated website"}
-          </h2>
-        </div>
-        <p className="text-xs text-slate-500">
-          Preview and code update after each AI response.
-        </p>
-      </div>
-
-      <div className="grid overflow-hidden rounded-lg border border-slate-200 lg:grid-cols-[minmax(0,1.25fr)_minmax(360px,0.75fr)]">
-        <div className="min-h-[680px] border-b border-slate-200 bg-white lg:border-b-0 lg:border-r">
-          <iframe
-            title="Generated website preview"
-            srcDoc={srcDoc}
-            sandbox="allow-scripts allow-same-origin"
-            className="h-full min-h-[680px] w-full bg-white"
-          />
-        </div>
-
-        <div className="flex min-h-[680px] flex-col bg-slate-950 text-slate-100">
-          <div className="flex border-b border-slate-800 bg-slate-900">
-            <button
-              type="button"
-              onClick={() => setActiveTab("app")}
-              className={`px-4 py-3 text-sm font-semibold transition ${
-                activeTab === "app"
-                  ? "bg-slate-950 text-white"
-                  : "text-slate-400 hover:text-white"
-              }`}
-            >
-              App.js
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveTab("css")}
-              className={`px-4 py-3 text-sm font-semibold transition ${
-                activeTab === "css"
-                  ? "bg-slate-950 text-white"
-                  : "text-slate-400 hover:text-white"
-              }`}
-            >
-              styles.css
-            </button>
+    <section className="min-w-0">
+      {viewMode === "preview" ? (
+        <div className="space-y-4">
+          <div className="mx-auto max-w-[1400px] overflow-hidden rounded-3xl border border-white/10 bg-slate-950 shadow-2xl shadow-black/40">
+            <div className="flex h-12 items-center justify-between border-b border-white/10 bg-slate-900/90 px-4">
+              <div className="flex items-center gap-2">
+                <span className="size-3 rounded-full bg-red-400" />
+                <span className="size-3 rounded-full bg-amber-400" />
+                <span className="size-3 rounded-full bg-emerald-400" />
+              </div>
+              <div className="max-w-[55%] truncate rounded-full border border-white/10 bg-black/25 px-4 py-1.5 text-center text-xs text-slate-400">
+                {title || "Generated website"}
+              </div>
+              <div className="w-16" />
+            </div>
+            <iframe
+              title="Generated website preview"
+              srcDoc={srcDoc}
+              sandbox="allow-scripts allow-same-origin"
+              className="h-[calc(100vh-300px)] min-h-[560px] w-full bg-white"
+            />
           </div>
-          <pre className="min-h-0 flex-1 overflow-auto p-4 text-xs leading-5">
+
+          <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-white">Images used</h3>
+              <span className="text-xs text-slate-500">
+                {imageSources.length || "No"} image
+                {imageSources.length === 1 ? "" : "s"}
+              </span>
+            </div>
+            {imageSources.length ? (
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                {imageSources.map((image) => (
+                  <div
+                    key={image.src}
+                    className="flex gap-3 rounded-xl border border-white/10 bg-black/20 p-3"
+                  >
+                    {image.isRemote ? (
+                      <img
+                        src={image.src}
+                        alt=""
+                        className="size-16 shrink-0 rounded-lg object-cover"
+                      />
+                    ) : (
+                      <div className="flex size-16 shrink-0 items-center justify-center rounded-lg bg-red-500/10 text-xs text-red-200">
+                        Missing
+                      </div>
+                    )}
+                    <div className="min-w-0">
+                      <p
+                        className={`text-xs font-semibold ${
+                          image.isRemote ? "text-emerald-300" : "text-red-300"
+                        }`}
+                      >
+                        {image.isRemote
+                          ? "Remote image"
+                          : "Missing local image"}
+                      </p>
+                      <p className="mt-1 truncate text-xs text-slate-400">
+                        {image.src}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-slate-500">
+                This generation uses gradients, cards, SVG icons, or styled
+                placeholders instead of images.
+              </p>
+            )}
+          </div>
+        </div>
+      ) : (
+        <div className="overflow-hidden rounded-3xl border border-white/10 bg-slate-950 shadow-2xl shadow-black/40">
+          <div className="flex items-center justify-between border-b border-white/10 bg-slate-900/90 px-4">
+            <div className="flex">
+              <button
+                type="button"
+                onClick={() => setActiveTab("app")}
+                className={`px-4 py-4 text-sm font-semibold transition ${
+                  activeTab === "app"
+                    ? "text-white"
+                    : "text-slate-500 hover:text-slate-200"
+                }`}
+              >
+                App.js
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab("css")}
+                className={`px-4 py-4 text-sm font-semibold transition ${
+                  activeTab === "css"
+                    ? "text-white"
+                    : "text-slate-500 hover:text-slate-200"
+                }`}
+              >
+                styles.css
+              </button>
+            </div>
+            <p className="hidden text-xs text-slate-500 sm:block">
+              Read-only generated source
+            </p>
+          </div>
+          <pre className="h-[calc(100vh-240px)] min-h-[620px] overflow-auto p-5 text-sm leading-6 text-slate-100">
             <code>{activeCode}</code>
           </pre>
         </div>
-      </div>
+      )}
     </section>
   );
 }
