@@ -6,7 +6,6 @@ import {
   Copy,
   Eye,
   Loader2,
-  PanelLeft,
   Plus,
   RotateCcw,
   Save,
@@ -18,20 +17,21 @@ import WebsitePreview from "@/components/WebsitePreview";
 import { isSupabaseConfigured, supabase } from "@/lib/supabaseClient";
 
 const promptExamples = [
-  "Build a premium home staging agency website for luxury real estate sellers",
-  "Build a modern staffing agency website for employers and job seekers",
-  "Build a SaaS landing page for an AI productivity tool",
-  "Build a luxury wedding photography website in Toronto",
-  "Build a clean restaurant website with menu, gallery, and reservations",
-  "Build a refined portfolio website for a brand designer",
+  "Staffing agency",
+  "Home staging",
+  "SaaS landing page",
+  "Portfolio",
 ];
 
-const loadingSteps = [
-  "Understanding business",
-  "Creating brand direction",
-  "Building layout",
-  "Writing code",
-];
+const examplePrompts = {
+  "Staffing agency":
+    "Build a modern staffing agency website for employers and job seekers",
+  "Home staging":
+    "Build a premium home staging agency website for luxury real estate sellers",
+  "SaaS landing page":
+    "Build a SaaS landing page for an AI productivity tool",
+  Portfolio: "Build a refined portfolio website for a brand designer",
+};
 
 function createHistoryItem(project, originalPrompt) {
   return {
@@ -296,7 +296,9 @@ export default function Home() {
 
   function selectHistoryItem(item) {
     if (item.savedOnly) {
-      setNotice("Saved project metadata loaded. File loading is not wired for saved projects yet.");
+      setActiveHistoryId(item.id);
+      setError("");
+      setNotice("");
       return;
     }
 
@@ -319,33 +321,34 @@ export default function Home() {
   const isBusy = Boolean(loadingAction);
 
   return (
-    <main className="min-h-screen bg-[#090b16] text-slate-100">
+    <main className="min-h-screen overflow-hidden bg-[#f6f2ea] font-sans text-[#111827]">
       <div className="flex min-h-screen">
-        <aside className="hidden w-72 shrink-0 border-r border-white/10 bg-slate-950/80 p-4 lg:flex lg:flex-col">
-          <div className="mb-6 flex items-center gap-3">
-            <div className="flex size-10 items-center justify-center rounded-xl bg-indigo-500 text-white shadow-lg shadow-indigo-500/30">
-              <Sparkles className="size-5" />
+        <aside className="hidden w-[260px] shrink-0 border-r border-black/5 bg-white/82 p-5 shadow-[12px_0_40px_rgba(42,31,18,0.04)] backdrop-blur-xl lg:flex lg:flex-col">
+          <div className="mb-7">
+            <div className="mb-4 flex items-center gap-3">
+              <div className="flex size-10 items-center justify-center rounded-2xl bg-[#111827] text-white shadow-lg shadow-slate-300/70">
+                <Sparkles className="size-5" />
+              </div>
+              <div>
+                <h1 className="text-base font-semibold tracking-tight">
+                  Nexus Builder
+                </h1>
+                <p className="text-sm text-[#6b7280]">AI website studio</p>
+              </div>
             </div>
-            <div>
-              <h1 className="text-lg font-semibold tracking-tight">
-                Nexus Builder
-              </h1>
-              <p className="text-xs text-slate-400">AI website studio</p>
-            </div>
+
+            <button
+              type="button"
+              onClick={handleReset}
+              className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-full bg-[#111827] px-4 text-sm font-medium text-white shadow-sm transition-colors duration-150 hover:bg-black"
+            >
+              <Plus className="size-4" />
+              New Site
+            </button>
           </div>
 
-          <button
-            type="button"
-            onClick={handleReset}
-            className="mb-5 inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-white text-sm font-semibold text-slate-950 transition hover:bg-indigo-50"
-          >
-            <Plus className="size-4" />
-            New Project
-          </button>
-
-          <div className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-            <PanelLeft className="size-4" />
-            History
+          <div className="mb-3 text-xs font-semibold uppercase tracking-[0.16em] text-[#6b7280]">
+            Recent projects
           </div>
 
           <div className="min-h-0 flex-1 space-y-2 overflow-auto pr-1">
@@ -355,153 +358,156 @@ export default function Home() {
                   key={item.id}
                   type="button"
                   onClick={() => selectHistoryItem(item)}
-                  className={`w-full rounded-xl border p-3 text-left transition ${
+                  className={`w-full rounded-xl border-l-[3px] px-3 py-2.5 text-left transition-colors duration-150 ${
                     activeHistoryId === item.id
-                      ? "border-indigo-400 bg-indigo-500/15"
-                      : "border-white/10 bg-white/[0.03] hover:border-white/20 hover:bg-white/[0.06]"
+                      ? "border-l-[#2563eb] border-y-transparent border-r-transparent bg-blue-50/60 shadow-sm"
+                      : "border-l-transparent border-y-transparent border-r-transparent bg-transparent hover:bg-[#f7f4ef]"
                   }`}
                 >
-                  <div className="truncate text-sm font-semibold text-white">
+                  <div className="truncate text-sm font-semibold text-[#111827]">
                     {item.title}
                   </div>
-                  <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-400">
+                  <p className="mt-1 line-clamp-2 text-xs leading-5 text-[#6b7280]">
                     {item.prompt}
                   </p>
-                  <p className="mt-2 text-[11px] text-slate-500">
+                  <p className="mt-2 text-[11px] text-[#6b7280]">
                     {formatProjectDate(item.createdAt)}
                   </p>
                 </button>
               ))
             ) : (
-              <div className="rounded-xl border border-dashed border-white/10 p-4 text-sm leading-6 text-slate-500">
+              <div className="rounded-xl border border-dashed border-black/10 bg-[#fbfaf8] p-4 text-sm leading-6 text-[#6b7280]">
                 Your generated projects will appear here.
               </div>
             )}
           </div>
         </aside>
 
-        <section className="flex min-w-0 flex-1 flex-col">
-          <header className="border-b border-white/10 bg-[#0d1020]/95 px-4 py-4 shadow-2xl shadow-black/20 sm:px-6">
-            <div className="mx-auto flex max-w-[1500px] flex-col gap-4">
-              <div className="flex flex-col gap-3 xl:flex-row xl:items-center">
-                <div className="relative flex-1">
-                  <textarea
-                    value={prompt}
-                    onChange={(event) => setPrompt(event.target.value)}
-                    rows={2}
-                    className="w-full resize-none rounded-2xl border border-white/10 bg-white/[0.06] px-4 py-4 pr-4 text-sm leading-6 text-white outline-none transition placeholder:text-slate-500 focus:border-indigo-400 focus:ring-4 focus:ring-indigo-500/15"
-                    placeholder="Describe the website you want to build..."
-                  />
+        <section className="flex h-screen min-w-0 flex-1 flex-col">
+          <div className="min-h-0 flex-1 overflow-auto bg-[radial-gradient(circle_at_22%_8%,rgba(249,115,22,0.12),transparent_25%),radial-gradient(circle_at_88%_18%,rgba(37,99,235,0.08),transparent_28%)] px-4 pb-24 pt-4 sm:px-6 lg:px-8">
+            <div className="mx-auto flex min-h-full max-w-[1540px] flex-col gap-4">
+              <div className="flex items-center justify-between gap-3 lg:hidden">
+                <div className="flex items-center gap-3">
+                  <div className="flex size-10 items-center justify-center rounded-2xl bg-[#111827] text-white">
+                    <Sparkles className="size-5" />
+                  </div>
+                  <div>
+                    <p className="text-base font-semibold">Nexus Builder</p>
+                    <p className="text-sm text-[#6b7280]">AI website studio</p>
+                  </div>
                 </div>
                 <button
                   type="button"
-                  onClick={handleGenerate}
-                  disabled={isBusy}
-                  className="inline-flex h-14 shrink-0 items-center justify-center gap-2 rounded-2xl bg-indigo-500 px-6 text-sm font-semibold text-white shadow-lg shadow-indigo-500/25 transition hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-60"
+                  onClick={handleReset}
+                  className="inline-flex h-9 items-center gap-2 rounded-full border border-black/5 bg-white px-3 text-xs font-medium text-[#111827] shadow-sm transition-shadow duration-150 hover:shadow-md"
                 >
-                  {loadingAction === "generate" ? (
-                    <Loader2 className="size-4 animate-spin" />
-                  ) : (
-                    <Sparkles className="size-4" />
-                  )}
-                  {loadingAction === "generate"
-                    ? "Designing..."
-                    : "Generate Website"}
+                  <Plus className="size-3.5" />
+                  New
                 </button>
               </div>
 
-              <div className="flex flex-wrap gap-2">
-                {promptExamples.map((example) => (
-                  <button
-                    key={example}
-                    type="button"
-                    onClick={() => setPrompt(example)}
-                    className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs font-medium text-slate-300 transition hover:border-indigo-400/60 hover:bg-indigo-500/10 hover:text-white"
-                  >
-                    {example.replace("Build a ", "")}
-                  </button>
-                ))}
-              </div>
-
-              <div className="flex flex-col gap-3 border-t border-white/10 pt-4 xl:flex-row xl:items-center">
-                <input
-                  value={instruction}
-                  onChange={(event) => setInstruction(event.target.value)}
-                  className="h-11 flex-1 rounded-xl border border-white/10 bg-black/20 px-4 text-sm text-white outline-none transition placeholder:text-slate-500 focus:border-indigo-400"
-                  placeholder="Ask AI to change this website..."
-                />
-                <div className="flex flex-wrap gap-2">
+              <section className="rounded-[1.35rem] border border-black/5 bg-white/88 p-4 shadow-[0_16px_46px_rgba(42,31,18,0.08)] ring-1 ring-white/70 backdrop-blur sm:p-5">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <div>
+                    <label
+                      htmlFor="website-prompt"
+                      className="text-xl font-semibold tracking-tight text-[#111827]"
+                    >
+                      What should we build today?
+                    </label>
+                    <p className="mt-1 text-sm text-[#6b7280]">
+                      Describe the business, audience, pages, and visual style.
+                    </p>
+                  </div>
                   <button
                     type="button"
-                    onClick={handleEdit}
-                    disabled={isBusy || !hasFiles}
-                    className="inline-flex h-11 items-center gap-2 rounded-xl border border-white/10 bg-white/[0.05] px-4 text-sm font-semibold text-white transition hover:bg-white/[0.09] disabled:cursor-not-allowed disabled:opacity-40"
+                    onClick={handleGenerate}
+                    disabled={isBusy}
+                    className="hidden h-10 shrink-0 items-center justify-center gap-2 rounded-full bg-[#111827] px-5 text-sm font-medium text-white shadow-sm transition-colors duration-150 hover:bg-black disabled:cursor-not-allowed disabled:opacity-50 sm:inline-flex"
                   >
-                    <Wand2 className="size-4" />
-                    Apply Edit
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleSave}
-                    disabled={isBusy || !hasFiles}
-                    className="inline-flex h-11 items-center gap-2 rounded-xl border border-white/10 bg-white/[0.05] px-4 text-sm font-semibold text-white transition hover:bg-white/[0.09] disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    <Save className="size-4" />
-                    Save Project
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleCopyCode}
-                    disabled={!hasFiles}
-                    className="inline-flex h-11 items-center gap-2 rounded-xl border border-white/10 bg-white/[0.05] px-4 text-sm font-semibold text-white transition hover:bg-white/[0.09] disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    <Copy className="size-4" />
-                    Copy Code
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleReset}
-                    className="inline-flex h-11 items-center gap-2 rounded-xl border border-white/10 bg-white/[0.05] px-4 text-sm font-semibold text-white transition hover:bg-white/[0.09]"
-                  >
-                    <RotateCcw className="size-4" />
-                    Reset
+                    {loadingAction === "generate" ? (
+                      <Loader2 className="size-4 animate-spin" />
+                    ) : (
+                      <Sparkles className="size-4" />
+                    )}
+                    {loadingAction === "generate"
+                      ? "Designing..."
+                      : "Generate Website"}
                   </button>
                 </div>
-              </div>
 
-              {(error || notice) && (
-                <div
-                  className={`rounded-xl border px-4 py-3 text-sm ${
-                    error
-                      ? "border-red-400/30 bg-red-500/10 text-red-200"
-                      : "border-emerald-400/30 bg-emerald-500/10 text-emerald-200"
-                  }`}
-                >
-                  {error || notice}
+                <div className="flex flex-col gap-3 sm:flex-row">
+                  <textarea
+                    id="website-prompt"
+                    value={prompt}
+                    onChange={(event) => setPrompt(event.target.value)}
+                    rows={2}
+                    className="min-h-16 flex-1 resize-none rounded-[1.1rem] border border-black/5 bg-white px-4 py-3 text-sm leading-6 text-[#111827] shadow-inner shadow-slate-100 outline-none transition-shadow duration-150 placeholder:text-[#9ca3af] focus:shadow-[0_0_0_4px_rgba(37,99,235,0.10)]"
+                    placeholder="Describe your website, business, audience, and style..."
+                  />
+                  <button
+                    type="button"
+                    onClick={handleGenerate}
+                    disabled={isBusy}
+                    className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-full bg-[#111827] px-5 text-sm font-medium text-white transition-colors duration-150 hover:bg-black disabled:cursor-not-allowed disabled:opacity-50 sm:hidden"
+                  >
+                    {loadingAction === "generate" ? (
+                      <Loader2 className="size-4 animate-spin" />
+                    ) : (
+                      <Sparkles className="size-4" />
+                    )}
+                    Generate Website
+                  </button>
                 </div>
-              )}
-            </div>
-          </header>
 
-          <div className="flex-1 overflow-auto px-4 py-5 sm:px-6">
-            <div className="mx-auto max-w-[1500px]">
-              <div className="mb-4 flex items-center justify-between gap-3">
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {promptExamples.map((example) => (
+                    <button
+                      key={example}
+                      type="button"
+                      onClick={() => setPrompt(examplePrompts[example])}
+                      className="rounded-full border border-black/5 bg-white px-3.5 py-1.5 text-xs font-medium text-[#6b7280] shadow-sm transition-shadow duration-150 hover:text-[#111827] hover:shadow-md"
+                    >
+                      {example}
+                    </button>
+                  ))}
+                </div>
+
+                {(error || notice) && (
+                  <div
+                    className={`mt-4 rounded-xl border px-4 py-3 text-sm ${
+                      error
+                        ? "border-red-200 bg-red-50 text-red-700"
+                        : "border-emerald-200 bg-emerald-50 text-emerald-700"
+                    }`}
+                  >
+                    {error || notice}
+                  </div>
+                )}
+              </section>
+
+              <div className="flex items-center justify-between gap-3">
                 <div>
-                  <h2 className="text-lg font-semibold">
-                    {project?.title || "Untitled project"}
-                  </h2>
-                  <p className="text-sm text-slate-500">
-                    Preview-first builder with editable AI commands.
+                  <div className="flex flex-wrap items-center gap-3">
+                    <h2 className="text-lg font-semibold text-[#111827]">
+                      {project?.title || "Untitled project"}
+                    </h2>
+                    <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-[#2563eb]">
+                      Live preview
+                    </span>
+                  </div>
+                  <p className="mt-1 text-sm text-[#6b7280]">
+                    Generated React landing page.
                   </p>
                 </div>
-                <div className="inline-flex rounded-xl border border-white/10 bg-white/[0.04] p-1">
+                <div className="inline-flex rounded-full border border-black/5 bg-white/85 p-1 shadow-sm backdrop-blur">
                   <button
                     type="button"
                     onClick={() => setViewMode("preview")}
-                    className={`inline-flex h-9 items-center gap-2 rounded-lg px-3 text-sm font-semibold transition ${
+                    className={`inline-flex h-9 items-center gap-2 rounded-lg px-3 text-sm font-medium transition-colors duration-150 ${
                       viewMode === "preview"
-                        ? "bg-white text-slate-950"
-                        : "text-slate-400 hover:text-white"
+                        ? "bg-[#111827] text-white"
+                        : "text-[#6b7280] hover:bg-[#f7f4ef] hover:text-[#111827]"
                     }`}
                   >
                     <Eye className="size-4" />
@@ -510,10 +516,10 @@ export default function Home() {
                   <button
                     type="button"
                     onClick={() => setViewMode("code")}
-                    className={`inline-flex h-9 items-center gap-2 rounded-lg px-3 text-sm font-semibold transition ${
+                    className={`inline-flex h-9 items-center gap-2 rounded-lg px-3 text-sm font-medium transition-colors duration-150 ${
                       viewMode === "code"
-                        ? "bg-white text-slate-950"
-                        : "text-slate-400 hover:text-white"
+                        ? "bg-[#111827] text-white"
+                        : "text-[#6b7280] hover:bg-[#f7f4ef] hover:text-[#111827]"
                     }`}
                   >
                     <Code2 className="size-4" />
@@ -523,27 +529,17 @@ export default function Home() {
               </div>
 
               {isBusy ? (
-                <div className="flex h-[calc(100vh-270px)] min-h-[560px] items-center justify-center rounded-3xl border border-white/10 bg-white/[0.04]">
-                  <div className="max-w-md text-center">
-                    <div className="mx-auto mb-5 flex size-14 items-center justify-center rounded-2xl bg-indigo-500 text-white shadow-xl shadow-indigo-500/30">
-                      <Loader2 className="size-7 animate-spin" />
+                <div className="flex h-[calc(100vh-285px)] min-h-[520px] items-center justify-center rounded-[1.5rem] border border-black/5 bg-white/86 p-6 shadow-[0_24px_70px_rgba(42,31,18,0.09)] ring-1 ring-white/70 backdrop-blur">
+                  <div className="max-w-sm text-center">
+                    <div className="mx-auto mb-5 flex size-12 items-center justify-center rounded-2xl bg-[#111827] text-white shadow-lg shadow-slate-300/70">
+                      <Loader2 className="size-5 animate-spin" />
                     </div>
-                    <h3 className="text-2xl font-semibold">
+                    <h3 className="text-xl font-semibold text-[#111827]">
                       Designing your website...
                     </h3>
-                    <div className="mt-6 grid gap-3 text-left">
-                      {loadingSteps.map((step, index) => (
-                        <div
-                          key={step}
-                          className="flex items-center gap-3 rounded-xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-slate-300"
-                        >
-                          <span className="flex size-6 items-center justify-center rounded-full bg-indigo-500/20 text-xs text-indigo-200">
-                            {index + 1}
-                          </span>
-                          {step}
-                        </div>
-                      ))}
-                    </div>
+                    <p className="mt-2 text-sm leading-6 text-[#6b7280]">
+                      Creating brand direction, copy, layout, and React code.
+                    </p>
                   </div>
                 </div>
               ) : hasFiles ? (
@@ -551,12 +547,65 @@ export default function Home() {
                   files={project.files}
                   title={project.title}
                   viewMode={viewMode}
+                  onCopyCode={handleCopyCode}
                 />
               ) : (
-                <EmptyState examples={promptExamples} onSelect={setPrompt} />
+                <EmptyState
+                  examples={promptExamples}
+                  onSelect={(example) => setPrompt(examplePrompts[example] || example)}
+                />
               )}
             </div>
           </div>
+
+          {hasFiles && (
+            <div className="bg-transparent px-4 pb-4 sm:px-6 lg:px-8">
+              <div className="mx-auto flex max-w-[1540px] flex-col gap-3 rounded-[1.35rem] border border-black/5 bg-white/90 p-3 shadow-[0_18px_55px_rgba(42,31,18,0.11)] backdrop-blur xl:flex-row xl:items-center">
+                <input
+                  value={instruction}
+                  onChange={(event) => setInstruction(event.target.value)}
+                  className="h-10 flex-1 rounded-full border border-black/5 bg-[#fbfaf8] px-5 text-sm text-[#111827] outline-none transition-shadow duration-150 placeholder:text-[#9ca3af] focus:bg-white focus:shadow-[0_0_0_4px_rgba(37,99,235,0.10)]"
+                  placeholder="Ask AI to refine this website..."
+                />
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={handleEdit}
+                    disabled={isBusy}
+                    className="inline-flex h-10 items-center gap-2 rounded-full bg-[#111827] px-4 text-sm font-medium text-white transition-colors duration-150 hover:bg-black disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <Wand2 className="size-4" />
+                    Apply Edit
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSave}
+                    disabled={isBusy}
+                    className="inline-flex h-10 items-center gap-2 rounded-full border border-black/5 bg-white px-4 text-sm font-medium text-[#111827] transition-shadow duration-150 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <Save className="size-4" />
+                    Save
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleCopyCode}
+                    className="inline-flex h-10 items-center gap-2 rounded-full border border-black/5 bg-white px-4 text-sm font-medium text-[#111827] transition-shadow duration-150 hover:shadow-md"
+                  >
+                    <Copy className="size-4" />
+                    Copy Code
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleReset}
+                    className="inline-flex h-10 items-center gap-2 rounded-full border border-black/5 bg-white px-4 text-sm font-medium text-[#111827] transition-shadow duration-150 hover:shadow-md"
+                  >
+                    <RotateCcw className="size-4" />
+                    Reset
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </section>
       </div>
     </main>

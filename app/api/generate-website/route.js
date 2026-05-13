@@ -1,5 +1,9 @@
 import { z } from "zod";
-import { fixBrokenImagePaths } from "@/lib/fixBrokenImagePaths";
+import {
+  ensureImagesInGeneratedCode,
+  hasRemoteImageReference,
+  shouldIncludeImages,
+} from "@/lib/fixBrokenImagePaths";
 import { parseWebsiteResponse } from "@/lib/parseWebsiteResponse";
 
 const requestSchema = z.object({
@@ -54,13 +58,48 @@ Rules:
 - Always create a real brand name.
 - Always create realistic business copy.
 - Always create a strong hero headline.
+- The hero section must be visually strong and appear first.
+- Do not start the page with Services, About, Features, or pricing.
+- Always include a modern hero with headline, subheadline, CTA, trust signal, and visual element.
+- Hero must look premium and visually interesting.
+- Do not generate plain centered hero text only.
+- Add visual cards, stats, trust badges, and a stronger CTA section.
+- Every generated website must include at least one strong visual image in the hero section unless the user specifically says no images.
+- Hero section should usually be a split layout: left side headline, subheadline, CTAs, and stats; right side large image card or visual image collage.
+- Use proper img attributes: src, alt, className, and loading="lazy".
+- Use only full remote image URLs.
+- Do not use local image paths like /image1.jpg, /hero.jpg, /gallery.jpg, or /office.jpg.
+- Use curated Unsplash image URLs based on business type.
+- For staffing/company/office use: https://images.unsplash.com/photo-1497366754035-f200968a6e72?auto=format&fit=crop&w=1200&q=80
+- For SaaS/tech use: https://images.unsplash.com/photo-1551434678-e076c223a692?auto=format&fit=crop&w=1200&q=80
+- For restaurant use: https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?auto=format&fit=crop&w=1200&q=80
+- For home staging/interior use: https://images.unsplash.com/photo-1600607687939-ce8a6c25118c?auto=format&fit=crop&w=1200&q=80
+- For wedding/photography use: https://images.unsplash.com/photo-1519741497674-611481863552?auto=format&fit=crop&w=1200&q=80
+- For portfolio/brand designer use: https://images.unsplash.com/photo-1497366811353-6870744d04b2?auto=format&fit=crop&w=1200&q=80
 - Always create modern visual hierarchy.
 - Always include navigation.
 - Always include multiple sections.
 - Always include CTA buttons.
 - Always include cards, stats, testimonials, and a contact section when relevant.
 - Use polished spacing and layout.
-- Use premium gradients and subtle backgrounds.
+- Generated website must look like a premium modern landing page.
+- Avoid old-looking centered heroes with plain gray blocks.
+- Avoid plain centered gray blocks anywhere in the page.
+- Avoid generic navigation labels and generic headings.
+- Avoid "Welcome to..." copy.
+- Use strong business-specific copy.
+- Use elegant section spacing.
+- Use modern cards, stats, testimonials, CTAs, and proof points.
+- Use good visual hierarchy with clear content rhythm.
+- Use refined colors based on the business type.
+- Use CSS gradients only subtly.
+- Use modern font sizing and generous line height.
+- Make the design look like a real agency, SaaS, service, or portfolio website.
+- Make the design look like a real premium website, not a beginner template.
+- For staffing websites, include an employer/candidate split, industries served, hiring stats, and process cards.
+- For staffing websites, avoid generic headings like "Find the Right Fit".
+- For staffing websites, use stronger copy such as "Hire reliable talent without slowing down your business" or "Flexible staffing solutions for growing teams".
+- Prefer polished layout over too many sections.
 - Use responsive design.
 - Put all React code inside APP_JS.
 - Put all CSS inside STYLES_CSS.
@@ -122,6 +161,29 @@ async function createWebsiteBrief(userPrompt, generateText, groq) {
   return text.trim();
 }
 
+function postProcessWebsiteImages(website, promptContext) {
+  return {
+    ...website,
+    files: website.files.map((file) =>
+      file.path === "/App.js"
+        ? {
+            ...file,
+            content: ensureImagesInGeneratedCode(file.content, promptContext),
+          }
+        : file,
+    ),
+  };
+}
+
+function appCodeHasRequiredImage(website, promptContext) {
+  if (!shouldIncludeImages(promptContext)) {
+    return true;
+  }
+
+  const appFile = website.files.find((file) => file.path === "/App.js");
+  return hasRemoteImageReference(appFile?.content || "");
+}
+
 export async function POST(request) {
   if (!process.env.GROQ_API_KEY?.trim()) {
     return Response.json(
@@ -141,20 +203,22 @@ export async function POST(request) {
     ]);
     const websiteBrief = await createWebsiteBrief(prompt, generateText, groq);
 
-    const { text } = await generateText({
-      model: groq("llama-3.3-70b-versatile"),
-      system: systemPrompt,
-      prompt: `Original user request:
+    const generationPrompt = `Original user request:
 ${prompt}
 
 Website brief to implement:
-${websiteBrief}`,
+${websiteBrief}`;
+
+    const { text } = await generateText({
+      model: groq("llama-3.3-70b-versatile"),
+      system: systemPrompt,
+      prompt: generationPrompt,
       temperature: 0.35,
       abortSignal: AbortSignal.timeout(AI_TIMEOUT_MS),
       maxRetries: 0,
     });
 
-    const website = parseWebsiteResponse(text);
+    let website = parseWebsiteResponse(text);
 
     if (!website) {
       console.error("AI response could not be parsed:", text);
@@ -164,20 +228,31 @@ ${websiteBrief}`,
       );
     }
 
-    return Response.json({
-      ...website,
-      files: website.files.map((file) =>
-        file.path === "/App.js"
-          ? {
-              ...file,
-              content: fixBrokenImagePaths(
-                file.content,
-                `${prompt}\n${websiteBrief}`,
-              ),
-            }
-          : file,
-      ),
-    });
+    website = postProcessWebsiteImages(website, `${prompt}\n${websiteBrief}`);
+
+    if (!appCodeHasRequiredImage(website, `${prompt}\n${websiteBrief}`)) {
+      const { text: retryText } = await generateText({
+        model: groq("llama-3.3-70b-versatile"),
+        system: systemPrompt,
+        prompt: `${generationPrompt}
+
+You forgot to include a real remote hero image. Regenerate with at least one remote images.unsplash.com hero image URL in an <img> tag with src, alt, className, and loading="lazy".`,
+        temperature: 0.3,
+        abortSignal: AbortSignal.timeout(AI_TIMEOUT_MS),
+        maxRetries: 0,
+      });
+
+      const retryWebsite = parseWebsiteResponse(retryText);
+
+      if (retryWebsite) {
+        website = postProcessWebsiteImages(
+          retryWebsite,
+          `${prompt}\n${websiteBrief}`,
+        );
+      }
+    }
+
+    return Response.json(website);
   } catch (error) {
     if (error instanceof z.ZodError) {
       return Response.json({ error: error.issues[0].message }, { status: 400 });

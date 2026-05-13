@@ -1,7 +1,8 @@
 "use client";
 
 /* eslint-disable @next/next/no-img-element */
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
+import { Copy } from "lucide-react";
 
 function sanitizeCode(content = "") {
   return String(content || "")
@@ -98,7 +99,12 @@ function extractImageSources(appCode) {
     let match = pattern.exec(appCode);
     while (match) {
       const value = (match[2] || match[1] || "").trim().replace(/^['"]|['"]$/g, "");
-      if (value && /\.(jpg|jpeg|png|webp|avif|svg)(\?|$)/i.test(value)) {
+      const isLikelyImage =
+        /^https?:\/\/images\.unsplash\.com\//i.test(value) ||
+        /\.(jpg|jpeg|png|webp|avif|svg)(\?|$)/i.test(value) ||
+        value.startsWith("/");
+
+      if (value && isLikelyImage) {
         sources.add(value);
       }
       match = pattern.exec(appCode);
@@ -112,41 +118,64 @@ function extractImageSources(appCode) {
   }));
 }
 
-export default function WebsitePreview({ files, title, viewMode = "preview" }) {
+export default function WebsitePreview({
+  files,
+  title,
+  viewMode = "preview",
+  onCopyCode,
+}) {
   const [activeTab, setActiveTab] = useState("app");
   const { appCode, cssCode } = useMemo(() => getGeneratedCode(files), [files]);
   const srcDoc = useMemo(() => buildSrcDoc(appCode, cssCode), [appCode, cssCode]);
   const imageSources = useMemo(() => extractImageSources(appCode), [appCode]);
   const activeCode = activeTab === "app" ? appCode : cssCode;
+  const iframeRef = useRef(null);
+  const previewKey = useMemo(
+    () => `${title || "preview"}-${appCode.length}-${cssCode.length}`,
+    [appCode, cssCode, title],
+  );
+
+  function handlePreviewLoad() {
+    try {
+      iframeRef.current?.contentWindow?.scrollTo(0, 0);
+    } catch {
+      // Cross-origin protection can block access in some browsers.
+    }
+  }
 
   return (
     <section className="min-w-0">
       {viewMode === "preview" ? (
         <div className="space-y-4">
-          <div className="mx-auto max-w-[1400px] overflow-hidden rounded-3xl border border-white/10 bg-slate-950 shadow-2xl shadow-black/40">
-            <div className="flex h-12 items-center justify-between border-b border-white/10 bg-slate-900/90 px-4">
+          <div className="mx-auto max-w-[1440px] overflow-hidden rounded-[1.35rem] border border-black/5 bg-white/85 shadow-[0_24px_70px_rgba(42,31,18,0.14)] ring-1 ring-white/70 backdrop-blur">
+            <div className="flex h-9 items-center justify-between border-b border-black/5 bg-[#fbfaf8] px-4">
               <div className="flex items-center gap-2">
-                <span className="size-3 rounded-full bg-red-400" />
-                <span className="size-3 rounded-full bg-amber-400" />
-                <span className="size-3 rounded-full bg-emerald-400" />
+                <span className="size-2.5 rounded-full bg-[#ef4444]" />
+                <span className="size-2.5 rounded-full bg-[#f59e0b]" />
+                <span className="size-2.5 rounded-full bg-[#10b981]" />
               </div>
-              <div className="max-w-[55%] truncate rounded-full border border-white/10 bg-black/25 px-4 py-1.5 text-center text-xs text-slate-400">
+              <div className="max-w-[55%] truncate rounded-full border border-black/5 bg-white/90 px-3 py-1 text-center text-[11px] text-[#6b7280] shadow-sm">
                 {title || "Generated website"}
               </div>
               <div className="w-16" />
             </div>
             <iframe
+              key={previewKey}
+              ref={iframeRef}
               title="Generated website preview"
               srcDoc={srcDoc}
               sandbox="allow-scripts allow-same-origin"
-              className="h-[calc(100vh-300px)] min-h-[560px] w-full bg-white"
+              onLoad={handlePreviewLoad}
+              className="h-[calc(100vh-285px)] min-h-[520px] w-full bg-white opacity-100 transition-opacity duration-150"
             />
           </div>
 
-          <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+          <div className="rounded-2xl border border-black/5 bg-white/80 p-4 shadow-sm backdrop-blur">
             <div className="mb-3 flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-white">Images used</h3>
-              <span className="text-xs text-slate-500">
+              <h3 className="text-sm font-semibold text-[#111827]">
+                Images used
+              </h3>
+              <span className="text-xs text-[#6b7280]">
                 {imageSources.length || "No"} image
                 {imageSources.length === 1 ? "" : "s"}
               </span>
@@ -156,7 +185,7 @@ export default function WebsitePreview({ files, title, viewMode = "preview" }) {
                 {imageSources.map((image) => (
                   <div
                     key={image.src}
-                    className="flex gap-3 rounded-xl border border-white/10 bg-black/20 p-3"
+                    className="flex gap-3 rounded-xl border border-black/5 bg-[#fbfaf8] p-3"
                   >
                     {image.isRemote ? (
                       <img
@@ -165,21 +194,21 @@ export default function WebsitePreview({ files, title, viewMode = "preview" }) {
                         className="size-16 shrink-0 rounded-lg object-cover"
                       />
                     ) : (
-                      <div className="flex size-16 shrink-0 items-center justify-center rounded-lg bg-red-500/10 text-xs text-red-200">
+                      <div className="flex size-16 shrink-0 items-center justify-center rounded-lg bg-red-50 text-xs text-red-700">
                         Missing
                       </div>
                     )}
                     <div className="min-w-0">
                       <p
                         className={`text-xs font-semibold ${
-                          image.isRemote ? "text-emerald-300" : "text-red-300"
+                          image.isRemote ? "text-emerald-700" : "text-red-700"
                         }`}
                       >
                         {image.isRemote
                           ? "Remote image"
                           : "Missing local image"}
                       </p>
-                      <p className="mt-1 truncate text-xs text-slate-400">
+                      <p className="mt-1 truncate text-xs text-[#6b7280]">
                         {image.src}
                       </p>
                     </div>
@@ -187,16 +216,15 @@ export default function WebsitePreview({ files, title, viewMode = "preview" }) {
                 ))}
               </div>
             ) : (
-              <p className="text-sm text-slate-500">
-                This generation uses gradients, cards, SVG icons, or styled
-                placeholders instead of images.
+              <p className="text-sm text-[#6b7280]">
+                No image URLs found in generated code.
               </p>
             )}
           </div>
         </div>
       ) : (
-        <div className="overflow-hidden rounded-3xl border border-white/10 bg-slate-950 shadow-2xl shadow-black/40">
-          <div className="flex items-center justify-between border-b border-white/10 bg-slate-900/90 px-4">
+        <div className="overflow-hidden rounded-2xl border border-black/5 bg-[#0f172a] shadow-[0_24px_70px_rgba(42,31,18,0.14)]">
+          <div className="flex items-center justify-between border-b border-slate-700 bg-slate-900 px-4">
             <div className="flex">
               <button
                 type="button"
@@ -204,7 +232,7 @@ export default function WebsitePreview({ files, title, viewMode = "preview" }) {
                 className={`px-4 py-4 text-sm font-semibold transition ${
                   activeTab === "app"
                     ? "text-white"
-                    : "text-slate-500 hover:text-slate-200"
+                    : "text-slate-400 hover:text-slate-200"
                 }`}
               >
                 App.js
@@ -215,17 +243,22 @@ export default function WebsitePreview({ files, title, viewMode = "preview" }) {
                 className={`px-4 py-4 text-sm font-semibold transition ${
                   activeTab === "css"
                     ? "text-white"
-                    : "text-slate-500 hover:text-slate-200"
+                    : "text-slate-400 hover:text-slate-200"
                 }`}
               >
                 styles.css
               </button>
             </div>
-            <p className="hidden text-xs text-slate-500 sm:block">
-              Read-only generated source
-            </p>
+            <button
+              type="button"
+              onClick={onCopyCode}
+              className="inline-flex h-9 items-center gap-2 rounded-lg border border-slate-700 bg-slate-800 px-3 text-xs font-semibold text-slate-200 transition-colors duration-150 hover:bg-slate-700"
+            >
+              <Copy className="size-3.5" />
+              Copy code
+            </button>
           </div>
-          <pre className="h-[calc(100vh-240px)] min-h-[620px] overflow-auto p-5 text-sm leading-6 text-slate-100">
+          <pre className="h-[calc(100vh-285px)] min-h-[520px] overflow-auto p-5 text-sm leading-6 text-slate-100">
             <code>{activeCode}</code>
           </pre>
         </div>
