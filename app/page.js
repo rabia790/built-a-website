@@ -4,7 +4,9 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Code2,
   Copy,
+  ExternalLink,
   Eye,
+  Link as LinkIcon,
   Loader2,
   Plus,
   RotateCcw,
@@ -35,7 +37,8 @@ const examplePrompts = {
 
 function createHistoryItem(project, originalPrompt) {
   return {
-    id: crypto.randomUUID(),
+    id: project.id || crypto.randomUUID(),
+    projectId: project.id || "",
     title: project.title || "Untitled website",
     prompt: originalPrompt,
     files: project.files || [],
@@ -63,10 +66,15 @@ export default function Home() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [loadingAction, setLoadingAction] = useState("");
+  const [previewUrl, setPreviewUrl] = useState("");
 
   const hasFiles = useMemo(() => {
     return Array.isArray(project?.files) && project.files.length > 0;
   }, [project]);
+
+  const effectivePreviewUrl =
+    previewUrl ||
+    (mounted && project?.id ? `${window.location.origin}/preview/${project.id}` : "");
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -113,6 +121,7 @@ export default function Home() {
           .filter((item) => !existingIds.has(item.id))
           .map((item) => ({
             id: item.id,
+            projectId: item.id,
             title: item.title,
             prompt: item.original_prompt || "Saved project",
             files: [],
@@ -160,7 +169,10 @@ export default function Home() {
   function upsertHistory(nextProject, originalPrompt) {
     const item = createHistoryItem(nextProject, originalPrompt);
     setActiveHistoryId(item.id);
-    setHistory((current) => [item, ...current].slice(0, 12));
+    setHistory((current) => [
+      item,
+      ...current.filter((entry) => entry.id !== item.id),
+    ].slice(0, 12));
   }
 
   async function handleGenerate() {
@@ -174,6 +186,7 @@ export default function Home() {
 
     setLoadingAction("generate");
     setViewMode("preview");
+    setPreviewUrl("");
     try {
       const nextProject = await requestJson("/api/generate-website", {
         prompt: prompt.trim(),
@@ -202,6 +215,7 @@ export default function Home() {
     }
 
     setLoadingAction("edit");
+    setPreviewUrl("");
     try {
       const updatedProject = await requestJson("/api/edit-website", {
         instruction: instruction.trim(),
@@ -263,7 +277,16 @@ export default function Home() {
         throw filesError;
       }
 
-      setNotice("Project saved to Supabase.");
+      const savedWithId = {
+        ...project,
+        id: savedProject.id,
+        files: project.files,
+      };
+      const nextPreviewUrl = `${window.location.origin}/preview/${savedProject.id}`;
+      setProject(savedWithId);
+      setPreviewUrl(nextPreviewUrl);
+      upsertHistory(savedWithId, prompt.trim() || project.title || "Saved project");
+      setNotice("Project saved. Preview link is ready.");
     } catch (err) {
       setError(err.message || "Supabase could not save this project.");
     } finally {
@@ -284,6 +307,25 @@ export default function Home() {
     setNotice("Code copied to clipboard.");
   }
 
+  async function handleCopyPreviewLink() {
+    if (!effectivePreviewUrl) {
+      setError("Save the project before copying a preview link.");
+      return;
+    }
+
+    await navigator.clipboard.writeText(effectivePreviewUrl);
+    setNotice("Preview link copied.");
+  }
+
+  function handleOpenPreview() {
+    if (!effectivePreviewUrl) {
+      setError("Save the project before opening a preview link.");
+      return;
+    }
+
+    window.open(effectivePreviewUrl, "_blank", "noopener,noreferrer");
+  }
+
   function handleReset() {
     setProject(null);
     setPrompt("");
@@ -291,18 +333,69 @@ export default function Home() {
     setActiveHistoryId("");
     setError("");
     setNotice("");
+    setPreviewUrl("");
     setViewMode("preview");
   }
 
-  function selectHistoryItem(item) {
+  async function selectHistoryItem(item) {
     if (item.savedOnly) {
-      setActiveHistoryId(item.id);
       setError("");
       setNotice("");
+      setLoadingAction("load");
+
+      try {
+        if (!isSupabaseConfigured || !supabase) {
+          throw new Error("Supabase is not configured yet. Add your keys in .env.local.");
+        }
+
+        const { data: files, error: filesError } = await supabase
+          .from("project_files")
+          .select("file_path,file_content")
+          .eq("project_id", item.id)
+          .order("created_at", { ascending: true });
+
+        if (filesError) {
+          throw filesError;
+        }
+
+        if (!files?.length) {
+          throw new Error("No generated files were found for this project.");
+        }
+
+        const loadedProject = {
+          id: item.projectId || item.id,
+          title: item.title,
+          files: files.map((file) => ({
+            path: file.file_path,
+            content: file.file_content,
+          })),
+        };
+
+        setProject(loadedProject);
+        setPreviewUrl(`${window.location.origin}/preview/${loadedProject.id}`);
+        setPrompt(item.prompt);
+        setActiveHistoryId(item.id);
+        setViewMode("preview");
+        setHistory((current) =>
+          current.map((entry) =>
+            entry.id === item.id
+              ? { ...entry, files: loadedProject.files, savedOnly: false }
+              : entry,
+          ),
+        );
+      } catch (err) {
+        setError(err.message || "Could not load this saved project.");
+      } finally {
+        setLoadingAction("");
+      }
       return;
     }
 
-    setProject({ title: item.title, files: item.files });
+    const nextProjectId = item.projectId || "";
+    setProject({ id: nextProjectId, title: item.title, files: item.files });
+    setPreviewUrl(
+      nextProjectId ? `${window.location.origin}/preview/${nextProjectId}` : "",
+    );
     setPrompt(item.prompt);
     setActiveHistoryId(item.id);
     setViewMode("preview");
@@ -495,6 +588,16 @@ export default function Home() {
                     <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-[#2563eb]">
                       Live preview
                     </span>
+                    {effectivePreviewUrl && (
+                      <button
+                        type="button"
+                        onClick={handleOpenPreview}
+                        className="inline-flex h-7 items-center gap-1.5 rounded-full border border-black/5 bg-white px-3 text-xs font-medium text-[#111827] shadow-sm transition-shadow duration-150 hover:shadow-md"
+                      >
+                        <ExternalLink className="size-3.5" />
+                        Open Preview
+                      </button>
+                    )}
                   </div>
                   <p className="mt-1 text-sm text-[#6b7280]">
                     Generated React landing page.
@@ -528,6 +631,37 @@ export default function Home() {
                 </div>
               </div>
 
+              {effectivePreviewUrl && (
+                <div className="flex flex-col gap-3 rounded-2xl border border-blue-100 bg-blue-50/70 p-3 shadow-sm sm:flex-row sm:items-center">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold text-[#111827]">
+                      Preview link
+                    </p>
+                    <p className="mt-1 truncate text-xs text-[#2563eb]">
+                      {effectivePreviewUrl}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={handleOpenPreview}
+                      className="inline-flex h-9 items-center gap-2 rounded-full bg-[#111827] px-4 text-xs font-medium text-white transition-colors duration-150 hover:bg-black"
+                    >
+                      <ExternalLink className="size-3.5" />
+                      Open Preview
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleCopyPreviewLink}
+                      className="inline-flex h-9 items-center gap-2 rounded-full border border-black/5 bg-white px-4 text-xs font-medium text-[#111827] shadow-sm transition-shadow duration-150 hover:shadow-md"
+                    >
+                      <LinkIcon className="size-3.5" />
+                      Copy Link
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {isBusy ? (
                 <div className="flex h-[calc(100vh-285px)] min-h-[520px] items-center justify-center rounded-[1.5rem] border border-black/5 bg-white/86 p-6 shadow-[0_24px_70px_rgba(42,31,18,0.09)] ring-1 ring-white/70 backdrop-blur">
                   <div className="max-w-sm text-center">
@@ -535,7 +669,9 @@ export default function Home() {
                       <Loader2 className="size-5 animate-spin" />
                     </div>
                     <h3 className="text-xl font-semibold text-[#111827]">
-                      Designing your website...
+                      {loadingAction === "load"
+                        ? "Loading saved project..."
+                        : "Designing your website..."}
                     </h3>
                     <p className="mt-2 text-sm leading-6 text-[#6b7280]">
                       Creating brand direction, copy, layout, and React code.
@@ -560,48 +696,79 @@ export default function Home() {
 
           {hasFiles && (
             <div className="bg-transparent px-4 pb-4 sm:px-6 lg:px-8">
-              <div className="mx-auto flex max-w-[1540px] flex-col gap-3 rounded-[1.35rem] border border-black/5 bg-white/90 p-3 shadow-[0_18px_55px_rgba(42,31,18,0.11)] backdrop-blur xl:flex-row xl:items-center">
-                <input
-                  value={instruction}
-                  onChange={(event) => setInstruction(event.target.value)}
-                  className="h-10 flex-1 rounded-full border border-black/5 bg-[#fbfaf8] px-5 text-sm text-[#111827] outline-none transition-shadow duration-150 placeholder:text-[#9ca3af] focus:bg-white focus:shadow-[0_0_0_4px_rgba(37,99,235,0.10)]"
-                  placeholder="Ask AI to refine this website..."
-                />
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={handleEdit}
-                    disabled={isBusy}
-                    className="inline-flex h-10 items-center gap-2 rounded-full bg-[#111827] px-4 text-sm font-medium text-white transition-colors duration-150 hover:bg-black disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    <Wand2 className="size-4" />
-                    Apply Edit
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleSave}
-                    disabled={isBusy}
-                    className="inline-flex h-10 items-center gap-2 rounded-full border border-black/5 bg-white px-4 text-sm font-medium text-[#111827] transition-shadow duration-150 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    <Save className="size-4" />
-                    Save
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleCopyCode}
-                    className="inline-flex h-10 items-center gap-2 rounded-full border border-black/5 bg-white px-4 text-sm font-medium text-[#111827] transition-shadow duration-150 hover:shadow-md"
-                  >
-                    <Copy className="size-4" />
-                    Copy Code
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleReset}
-                    className="inline-flex h-10 items-center gap-2 rounded-full border border-black/5 bg-white px-4 text-sm font-medium text-[#111827] transition-shadow duration-150 hover:shadow-md"
-                  >
-                    <RotateCcw className="size-4" />
-                    Reset
-                  </button>
+              <div className="mx-auto max-w-[1540px] rounded-[1.35rem] border border-black/5 bg-white/90 p-3 shadow-[0_18px_55px_rgba(42,31,18,0.11)] backdrop-blur">
+                {effectivePreviewUrl && (
+                  <div className="mb-3 flex flex-col gap-2 border-b border-black/5 pb-3 text-sm text-[#6b7280] lg:flex-row lg:items-center">
+                    <span className="font-medium text-[#111827]">
+                      Preview link
+                    </span>
+                    <code className="min-w-0 flex-1 truncate rounded-full bg-[#fbfaf8] px-3 py-1 text-xs text-[#6b7280]">
+                      {effectivePreviewUrl}
+                    </code>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={handleOpenPreview}
+                        className="inline-flex h-8 items-center gap-2 rounded-full bg-[#111827] px-3 text-xs font-medium text-white transition-colors duration-150 hover:bg-black"
+                      >
+                        <ExternalLink className="size-3.5" />
+                        Open Preview
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleCopyPreviewLink}
+                        className="inline-flex h-8 items-center gap-2 rounded-full border border-black/5 bg-white px-3 text-xs font-medium text-[#111827] transition-shadow duration-150 hover:shadow-md"
+                      >
+                        <LinkIcon className="size-3.5" />
+                        Copy Link
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex flex-col gap-3 xl:flex-row xl:items-center">
+                  <input
+                    value={instruction}
+                    onChange={(event) => setInstruction(event.target.value)}
+                    className="h-10 flex-1 rounded-full border border-black/5 bg-[#fbfaf8] px-5 text-sm text-[#111827] outline-none transition-shadow duration-150 placeholder:text-[#9ca3af] focus:bg-white focus:shadow-[0_0_0_4px_rgba(37,99,235,0.10)]"
+                    placeholder="Ask AI to refine this website..."
+                  />
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={handleEdit}
+                      disabled={isBusy}
+                      className="inline-flex h-10 items-center gap-2 rounded-full bg-[#111827] px-4 text-sm font-medium text-white transition-colors duration-150 hover:bg-black disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <Wand2 className="size-4" />
+                      Apply Edit
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleSave}
+                      disabled={isBusy}
+                      className="inline-flex h-10 items-center gap-2 rounded-full border border-black/5 bg-white px-4 text-sm font-medium text-[#111827] transition-shadow duration-150 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <Save className="size-4" />
+                      Save
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleCopyCode}
+                      className="inline-flex h-10 items-center gap-2 rounded-full border border-black/5 bg-white px-4 text-sm font-medium text-[#111827] transition-shadow duration-150 hover:shadow-md"
+                    >
+                      <Copy className="size-4" />
+                      Copy Code
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleReset}
+                      className="inline-flex h-10 items-center gap-2 rounded-full border border-black/5 bg-white px-4 text-sm font-medium text-[#111827] transition-shadow duration-150 hover:shadow-md"
+                    >
+                      <RotateCcw className="size-4" />
+                      Reset
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
