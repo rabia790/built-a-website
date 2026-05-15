@@ -18,8 +18,59 @@ create table if not exists public.project_files (
   updated_at timestamptz not null default now()
 );
 
+create table if not exists public.generation_logs (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid null references public.projects(id) on delete set null,
+  prompt text,
+  category text,
+  website_type text,
+  generated_title text,
+  app_code text,
+  css_code text,
+  quality_score int,
+  validation_errors jsonb default '[]'::jsonb,
+  user_rating int null,
+  user_feedback text null,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists public.edit_logs (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid null references public.projects(id) on delete set null,
+  instruction text,
+  before_app_code text,
+  before_css_code text,
+  after_app_code text,
+  after_css_code text,
+  edit_success boolean,
+  validation_errors jsonb default '[]'::jsonb,
+  user_rating int null,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists public.template_examples (
+  id uuid primary key default gen_random_uuid(),
+  category text,
+  title text,
+  prompt text,
+  app_code text,
+  css_code text,
+  rating int,
+  is_featured boolean not null default false,
+  created_at timestamptz not null default now()
+);
+
 create index if not exists project_files_project_id_idx
   on public.project_files(project_id);
+
+create index if not exists generation_logs_category_idx
+  on public.generation_logs(category);
+
+create index if not exists edit_logs_project_id_idx
+  on public.edit_logs(project_id);
+
+create index if not exists template_examples_category_idx
+  on public.template_examples(category);
 
 create or replace function public.set_updated_at()
 returns trigger as $$
@@ -41,6 +92,9 @@ for each row execute function public.set_updated_at();
 
 alter table public.projects enable row level security;
 alter table public.project_files enable row level security;
+alter table public.generation_logs enable row level security;
+alter table public.edit_logs enable row level security;
+alter table public.template_examples enable row level security;
 
 drop policy if exists "Development read projects" on public.projects;
 create policy "Development read projects"
@@ -83,3 +137,21 @@ drop policy if exists "Development delete project files" on public.project_files
 create policy "Development delete project files"
 on public.project_files for delete
 using (true);
+
+drop policy if exists "Development all generation logs" on public.generation_logs;
+create policy "Development all generation logs"
+on public.generation_logs for all
+using (true)
+with check (true);
+
+drop policy if exists "Development all edit logs" on public.edit_logs;
+create policy "Development all edit logs"
+on public.edit_logs for all
+using (true)
+with check (true);
+
+drop policy if exists "Development all template examples" on public.template_examples;
+create policy "Development all template examples"
+on public.template_examples for all
+using (true)
+with check (true);

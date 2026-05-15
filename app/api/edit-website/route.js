@@ -5,6 +5,8 @@ import {
   shouldIncludeImages,
 } from "@/lib/fixBrokenImagePaths";
 import { parseWebsiteResponse } from "@/lib/parseWebsiteResponse";
+import { safeInsert } from "@/lib/serverSupabase";
+import { validateWebsiteQuality } from "@/lib/validateWebsiteQuality";
 
 const fileSchema = z.object({
   path: z.string().min(1),
@@ -14,6 +16,7 @@ const fileSchema = z.object({
 const requestSchema = z.object({
   instruction: z.string().trim().min(1, "Edit instruction is required."),
   currentFiles: z.array(fileSchema).min(1, "Current website files are required."),
+  projectId: z.string().optional(),
 });
 
 const AI_TIMEOUT_MS = 45000;
@@ -147,6 +150,41 @@ function appCodeHasRequiredImage(website, promptContext) {
   return hasRemoteImageReference(appFile?.content || "");
 }
 
+function getFileContent(files, path) {
+  return files.find((file) => file.path === path)?.content || "";
+}
+
+function getWebsiteCode(website) {
+  return {
+    appCode: getFileContent(website.files || [], "/App.js"),
+    cssCode: getFileContent(website.files || [], "/styles.css"),
+  };
+}
+
+async function logEdit({
+  projectId,
+  instruction,
+  currentFiles,
+  website,
+  validation,
+  success,
+}) {
+  const { appCode, cssCode } = getWebsiteCode(website);
+
+  const log = await safeInsert("edit_logs", {
+    project_id: projectId || null,
+    instruction,
+    before_app_code: getFileContent(currentFiles, "/App.js"),
+    before_css_code: getFileContent(currentFiles, "/styles.css"),
+    after_app_code: appCode,
+    after_css_code: cssCode,
+    edit_success: success,
+    validation_errors: validation.errors,
+  });
+
+  return log?.id || "";
+}
+
 export async function POST(request) {
   if (!process.env.GROQ_API_KEY?.trim()) {
     return Response.json(
@@ -159,7 +197,7 @@ export async function POST(request) {
 
   try {
     const body = await readRequestPayload(request);
-    const { instruction, currentFiles } = requestSchema.parse(body);
+    const { instruction, currentFiles, projectId } = requestSchema.parse(body);
     const [{ generateText }, { groq }] = await Promise.all([
       import("ai"),
       import("@ai-sdk/groq"),
@@ -191,14 +229,21 @@ ${JSON.stringify(currentFiles, null, 2)}`;
 
     const promptContext = `${instruction}\n${JSON.stringify(currentFiles)}`;
     website = postProcessWebsiteImages(website, promptContext);
+    let validation = validateWebsiteQuality({
+      ...getWebsiteCode(website),
+      instruction,
+    });
 
-    if (!appCodeHasRequiredImage(website, promptContext)) {
+    if (!appCodeHasRequiredImage(website, promptContext) || validation.score < 75) {
       const { text: retryText } = await generateText({
         model: groq("llama-3.3-70b-versatile"),
         system: systemPrompt,
         prompt: `${editPrompt}
 
-You forgot to include a real remote hero image. Regenerate with at least one remote images.unsplash.com hero image URL in an <img> tag with src, alt, className, and loading="lazy".`,
+The edit result failed validation. Regenerate the full updated website and preserve the important structure while fixing these issues:
+${validation.errors.map((issue) => `- ${issue}`).join("\n")}
+
+If the user asked for pricing/packages, include pricing/packages. If they asked for more luxury, strengthen typography, spacing, visual hierarchy, colors, and premium design language. Include a real remote hero image when images are expected.`,
         temperature: 0.25,
         abortSignal: AbortSignal.timeout(AI_TIMEOUT_MS),
         maxRetries: 0,
@@ -208,10 +253,28 @@ You forgot to include a real remote hero image. Regenerate with at least one rem
 
       if (retryWebsite) {
         website = postProcessWebsiteImages(retryWebsite, promptContext);
+        validation = validateWebsiteQuality({
+          ...getWebsiteCode(website),
+          instruction,
+        });
       }
     }
 
-    return Response.json(website);
+    const editLogId = await logEdit({
+      projectId,
+      instruction,
+      currentFiles,
+      website,
+      validation,
+      success: validation.score >= 75,
+    });
+
+    return Response.json({
+      ...website,
+      editLogId,
+      qualityScore: validation.score,
+      validationErrors: validation.errors,
+    });
   } catch (error) {
     if (error instanceof z.ZodError) {
       return Response.json({ error: error.issues[0].message }, { status: 400 });

@@ -220,6 +220,7 @@ export default function Home() {
       const updatedProject = await requestJson("/api/edit-website", {
         instruction: instruction.trim(),
         currentFiles: project.files,
+        projectId: project.id,
       });
       setProject(updatedProject);
       setInstruction("");
@@ -277,6 +278,13 @@ export default function Home() {
         throw filesError;
       }
 
+      if (project.generationLogId) {
+        await supabase
+          .from("generation_logs")
+          .update({ project_id: savedProject.id })
+          .eq("id", project.generationLogId);
+      }
+
       const savedWithId = {
         ...project,
         id: savedProject.id,
@@ -309,7 +317,7 @@ export default function Home() {
 
   async function handleCopyPreviewLink() {
     if (!effectivePreviewUrl) {
-      setError("Save the project before copying a preview link.");
+      setError("Please save the project first to create a preview link.");
       return;
     }
 
@@ -319,11 +327,57 @@ export default function Home() {
 
   function handleOpenPreview() {
     if (!effectivePreviewUrl) {
-      setError("Save the project before opening a preview link.");
+      setError("Please save the project first to create a preview link.");
       return;
     }
 
     window.open(effectivePreviewUrl, "_blank", "noopener,noreferrer");
+  }
+
+  async function handleFeedback(feedback, rating = 3) {
+    setError("");
+    setNotice("");
+
+    const logId = project?.generationLogId || project?.editLogId;
+
+    if (!logId) {
+      setError("Feedback is available after a new generation or edit is logged.");
+      return;
+    }
+
+    try {
+      await requestJson("/api/feedback", {
+        logType: project?.editLogId ? "edit" : "generation",
+        logId,
+        rating,
+        feedback,
+      });
+      setNotice("Feedback saved. Thank you.");
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function handleSaveAsTemplateExample() {
+    setError("");
+    setNotice("");
+
+    if (!hasFiles) {
+      setError("Generate a website before saving an example.");
+      return;
+    }
+
+    try {
+      await requestJson("/api/template-example", {
+        title: project.title || "Template example",
+        prompt: prompt.trim() || project.title || "Saved example",
+        category: project.category,
+        files: project.files,
+      });
+      setNotice("Saved as a featured template example.");
+    } catch (err) {
+      setError(err.message);
+    }
   }
 
   function handleReset() {
@@ -662,6 +716,71 @@ export default function Home() {
                 </div>
               )}
 
+              {hasFiles && !effectivePreviewUrl && (
+                <div className="flex flex-col gap-3 rounded-2xl border border-amber-100 bg-amber-50/70 p-3 shadow-sm sm:flex-row sm:items-center">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold text-[#111827]">
+                      Save your project to generate a shareable preview link.
+                    </p>
+                    <p className="mt-1 text-xs leading-5 text-[#6b7280]">
+                      Preview links are created only after your website files
+                      are saved.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleSave}
+                    disabled={isBusy}
+                    className="inline-flex h-9 shrink-0 items-center gap-2 rounded-full bg-[#111827] px-4 text-xs font-medium text-white transition-colors duration-150 hover:bg-black disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <Save className="size-3.5" />
+                    Save Project
+                  </button>
+                </div>
+              )}
+
+              {hasFiles && (
+                <div className="rounded-2xl border border-black/5 bg-white/80 p-3 shadow-sm backdrop-blur">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                    <div>
+                      <p className="text-sm font-semibold text-[#111827]">
+                        How is this result?
+                      </p>
+                      <p className="mt-1 text-xs text-[#6b7280]">
+                        Your feedback improves future generations and template
+                        examples.
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {[
+                        ["Looks good", 5],
+                        ["Too basic", 2],
+                        ["Wrong images", 2],
+                        ["Bad colors", 2],
+                        ["Not premium", 2],
+                        ["Edit did not work", 1],
+                      ].map(([label, rating]) => (
+                        <button
+                          key={label}
+                          type="button"
+                          onClick={() => handleFeedback(label, rating)}
+                          className="rounded-full border border-black/5 bg-white px-3 py-1.5 text-xs font-medium text-[#6b7280] shadow-sm transition-shadow duration-150 hover:text-[#111827] hover:shadow-md"
+                        >
+                          {label}
+                        </button>
+                      ))}
+                      <button
+                        type="button"
+                        onClick={handleSaveAsTemplateExample}
+                        className="rounded-full bg-[#111827] px-3 py-1.5 text-xs font-medium text-white transition-colors duration-150 hover:bg-black"
+                      >
+                        Save as template example
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {isBusy ? (
                 <div className="flex h-[calc(100vh-285px)] min-h-[520px] items-center justify-center rounded-[1.5rem] border border-black/5 bg-white/86 p-6 shadow-[0_24px_70px_rgba(42,31,18,0.09)] ring-1 ring-white/70 backdrop-blur">
                   <div className="max-w-sm text-center">
@@ -723,6 +842,29 @@ export default function Home() {
                         Copy Link
                       </button>
                     </div>
+                  </div>
+                )}
+
+                {!effectivePreviewUrl && (
+                  <div className="mb-3 flex flex-col gap-2 rounded-2xl bg-[#fbfaf8] px-4 py-3 text-sm text-[#6b7280] lg:flex-row lg:items-center lg:justify-between">
+                    <div>
+                      <p className="font-medium text-[#111827]">
+                        Save first to get a public preview URL.
+                      </p>
+                      <p className="mt-1 text-xs">
+                        Preview links are created only after your website files
+                        are saved.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleSave}
+                      disabled={isBusy}
+                      className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-full bg-[#111827] px-4 text-xs font-medium text-white transition-colors duration-150 hover:bg-black disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <Save className="size-3.5" />
+                      Save Project
+                    </button>
                   </div>
                 )}
 
