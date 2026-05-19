@@ -8,11 +8,21 @@ import { detectWebsiteCategory as detectTemplateCategory } from "@/lib/detectWeb
 import { parseWebsiteResponse } from "@/lib/parseWebsiteResponse";
 import { buildHomeStagingWebsite } from "@/lib/templates/homeStagingTemplate";
 import { buildPortfolioWebsite } from "@/lib/templates/portfolioTemplate";
+import { buildStaffingWebsite } from "@/lib/templates/staffingTemplate";
+import { selectTemplateVariant } from "@/lib/selectTemplateVariant";
+import {
+  getVariantDesignDirection,
+  getVariantImageSet,
+  templateVariants,
+} from "@/lib/templateVariants";
 import { safeInsert, serverSupabase } from "@/lib/serverSupabase";
 import { validateWebsiteQuality as scoreWebsiteQuality } from "@/lib/validateWebsiteQuality";
 
 const requestSchema = z.object({
   prompt: z.string().trim().min(1, "Prompt is required."),
+  websiteType: z.string().optional(),
+  designSeed: z.string().optional(),
+  forcedVariant: z.string().optional(),
 });
 
 const AI_TIMEOUT_MS = 45000;
@@ -33,7 +43,9 @@ const imageGuidance = {
     "https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?auto=format&fit=crop&w=1200&q=80",
   ],
   staffing: [
-    "https://images.unsplash.com/photo-1497366754035-f200968a6e72?auto=format&fit=crop&w=1200&q=80",
+    "https://images.unsplash.com/photo-1556761175-b413da4baf72?auto=format&fit=crop&w=1400&q=85",
+    "https://images.unsplash.com/photo-1521737604893-d14cc237f11d?auto=format&fit=crop&w=1400&q=85",
+    "https://images.unsplash.com/photo-1551836022-d5d88e9218df?auto=format&fit=crop&w=1400&q=85",
   ],
   interior: [
     "https://images.unsplash.com/photo-1600607687939-ce8a6c25118c?auto=format&fit=crop&w=1200&q=80",
@@ -52,7 +64,7 @@ const imageGuidance = {
 function detectWebsiteCategory(prompt = "") {
   const templateCategory = detectTemplateCategory(prompt);
 
-  if (templateCategory === "home_staging" || templateCategory === "portfolio") {
+  if (templateCategory !== "ai_generated") {
     return templateCategory;
   }
 
@@ -132,9 +144,15 @@ Allowed image URLs:
 ${urls.map((url) => `- ${url}`).join("\n")}`;
 }
 
-function getPremiumDesignSystem(category, prompt) {
+function getPremiumDesignSystem(category, prompt, variant) {
+  const variantDirection = getVariantDesignDirection(category, variant);
+  const availableVariants = templateVariants[category]?.join(", ") || "ai_generated";
+
   if (category === "home_staging") {
     return `Category: Premium home staging agency
+Selected template variant: ${variant}
+Available variants: ${availableVariants}
+Variant design direction: ${variantDirection}
 Audience: luxury real estate sellers, realtors, property investors
 Brand feeling: elegant, warm, editorial, high-end interiors
 Color palette:
@@ -188,6 +206,9 @@ Avoid: tiny hero, plain gray blocks, repeated same image, generic copy, restaura
   };
 
   return `${templates[category] || templates.generic_business}
+Selected template variant: ${variant}
+Available variants for this category: ${availableVariants}
+Variant design direction: ${variantDirection}
 Prompt: ${prompt}
 The website must look like a professional agency/designer built it. Do not create a simple beginner landing page.`;
 }
@@ -239,6 +260,12 @@ Rules:
 - Do not explain anything.
 - Return only the separator format.
 - You must generate a premium custom website using the category-specific design system provided in the prompt.
+- You must follow the selected template variant and make it visibly different from other variants in structure, section order, visual rhythm, and emphasis.
+- Do not reuse the same simple structure for every website.
+- Do not use the same layout for every website.
+- The selected template variant must change the visual structure.
+- A template is a design direction, not copy-paste output.
+- Customize brand name, copy, images, colors, sections, and page structure for each prompt.
 - The website must look like a professional agency/designer built it.
 - Do not let the layout feel invented casually from scratch; follow the selected premium template direction.
 - Do not create a simple beginner landing page.
@@ -301,6 +328,10 @@ Rules:
 - Make the design look like a real agency, SaaS, service, or portfolio website.
 - Make the design look like a real premium website, not a beginner template.
 - For staffing websites, include an employer/candidate split, industries served, hiring stats, and process cards.
+- For staffing websites, pages must include Home, Employers, Candidates, Industries, Process, About, Contact.
+- For staffing websites, do not start with a giant full-width image. Start with navbar and split hero copy.
+- For staffing websites, use professional team/hiring/office images only from the image guidance.
+- For staffing websites, do not use interior staging images, restaurant images, or giant cropped hallway images.
 - For staffing websites, avoid generic headings like "Find the Right Fit".
 - For staffing websites, use stronger copy such as "Hire reliable talent without slowing down your business" or "Flexible staffing solutions for growing teams".
 - For kids ecommerce/adventure sites, pages should be Home, Shop, Categories, Brands, Blog, About, Contact.
@@ -335,6 +366,13 @@ Rules:
 - Use inline SVG icons if icons are needed.
 - Tailwind classes are allowed.
 - Use custom CSS if needed.
+- Add stable data-edit-id attributes to important editable elements.
+- Hero elements must include data-edit-id="hero-eyebrow", data-edit-id="hero-headline", data-edit-id="hero-subheadline", data-edit-id="primary-cta", data-edit-id="secondary-cta", and data-edit-id="hero-image" where applicable.
+- Important sections must include data-edit-id values such as services-section, portfolio-section, process-section, pricing-section, testimonial-section, and contact-section.
+- Important cards must include data-edit-id values such as service-card-1, service-card-2, stat-card-1, and package-card-1.
+- The main hero h1 must use className="hero-title" and data-edit-id="hero-headline".
+- In CSS, define :root variables for --hero-headline-size, --hero-headline-color, --hero-subheadline-size, --primary-color, and --accent-color.
+- The .hero-title rule must use font-size: var(--hero-headline-size); and color: var(--hero-headline-color);.
 - Keep the website responsive and modern.
 - Use function App() with currentPage state.
 - Include components/pages inside /App.js: Navbar, HomePage, AboutPage, ServicesPage or ShopPage, Categories/Gallery/Industries page, Process/Pricing/Packages page, ContactPage, Footer.
@@ -597,7 +635,7 @@ ${String(example.css_code || "").slice(0, 900)}`,
   }
 }
 
-async function finalizeWebsite({ website, prompt, category, websiteType }) {
+async function finalizeWebsite({ website, prompt, category, websiteType, designSeed }) {
   const { appCode, cssCode } = getWebsiteCode(website);
   const validation = scoreWebsiteQuality({
     appCode,
@@ -619,27 +657,41 @@ async function finalizeWebsite({ website, prompt, category, websiteType }) {
     qualityScore: validation.score,
     validationErrors: validation.errors,
     category,
+    templateVariant: website.templateVariant || "",
+    imageSetUsed: website.imageSetUsed || getVariantImageSet(category),
+    designSeed: designSeed || website.designSeed || "",
   };
 }
 
 export async function POST(request) {
   try {
     const body = await readRequestPayload(request);
-    const { prompt } = requestSchema.parse(body);
+    const { prompt, designSeed = "", forcedVariant = "" } = requestSchema.parse(body);
+    const initialCategory = detectWebsiteCategory(prompt);
+    const selectedVariant = selectTemplateVariant(
+      initialCategory,
+      prompt,
+      forcedVariant,
+      designSeed,
+    );
 
     if (detectTemplateCategory(prompt) === "home_staging") {
       return Response.json(
         await finalizeWebsite({
           website: buildHomeStagingWebsite({
+            prompt,
             brandName: "Eleve Staging Co.",
             headline:
               "Stage homes that sell faster, photograph better, and feel unforgettable",
             subheadline:
               "Luxury home staging for real estate sellers, agents, and developers who want every listing to feel move-in ready.",
+            variant: selectedVariant,
+            designSeed,
           }),
           prompt,
           category: "home_staging",
-          websiteType: "template",
+          websiteType: `template:${selectedVariant}`,
+          designSeed,
         }),
       );
     }
@@ -648,14 +700,32 @@ export async function POST(request) {
       return Response.json(
         await finalizeWebsite({
           website: buildPortfolioWebsite({
+            prompt,
             brandName: "Aurora Brand Studio",
             headline: "Brand identities with strategy, soul, and staying power",
             subheadline:
               "A refined design studio crafting visual systems, websites, and launch-ready brand worlds for founders and growing companies.",
+            variant: selectedVariant,
           }),
           prompt,
           category: "portfolio",
-          websiteType: "template",
+          websiteType: `template:${selectedVariant}`,
+          designSeed,
+        }),
+      );
+    }
+
+    if (detectTemplateCategory(prompt) === "staffing") {
+      return Response.json(
+        await finalizeWebsite({
+          website: buildStaffingWebsite({
+            prompt,
+            variant: selectedVariant,
+          }),
+          prompt,
+          category: "staffing",
+          websiteType: `template:${selectedVariant}`,
+          designSeed,
         }),
       );
     }
@@ -674,9 +744,19 @@ export async function POST(request) {
       import("@ai-sdk/groq"),
     ]);
     const websiteCategory = detectWebsiteCategory(prompt);
+    const templateVariant = selectTemplateVariant(
+      websiteCategory,
+      prompt,
+      forcedVariant,
+      designSeed,
+    );
     const websiteBrief = await createWebsiteBrief(prompt, generateText, groq);
     const imageRules = getImageGuidance(prompt, websiteBrief);
-    const premiumDesignSystem = getPremiumDesignSystem(websiteCategory, prompt);
+    const premiumDesignSystem = getPremiumDesignSystem(
+      websiteCategory,
+      prompt,
+      templateVariant,
+    );
     const examples = await getTemplateExamples(websiteCategory);
 
     const generationPrompt = `Original user request:
@@ -684,6 +764,9 @@ ${prompt}
 
 Detected category:
 ${websiteCategory}
+
+Selected template variant:
+${templateVariant}
 
 Website brief to implement:
 ${websiteBrief}
@@ -697,7 +780,8 @@ ${imageRules}
 Quality references:
 ${examples || "No saved examples yet. Use the category design system as the quality reference."}
 
-Use these references as quality inspiration. Do not copy exactly.`;
+Use these references as quality inspiration. Do not copy exactly.
+Generate design metadata in your own code through real sections and comments are not needed.`;
 
     const { text } = await generateText({
       model: groq("llama-3.3-70b-versatile"),
@@ -768,10 +852,16 @@ Do not reuse incorrect imagery. Follow the image guidance exactly. Never repeat 
 
     return Response.json(
       await finalizeWebsite({
-        website,
+        website: {
+          ...website,
+          templateVariant,
+          imageSetUsed: getVariantImageSet(websiteCategory),
+          designSeed,
+        },
         prompt,
         category: websiteCategory,
-        websiteType: "ai_generated",
+        websiteType: `ai_generated:${templateVariant}`,
+        designSeed,
       }),
     );
   } catch (error) {

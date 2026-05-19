@@ -5,9 +5,45 @@ create table if not exists public.projects (
   user_id uuid null,
   title text not null,
   original_prompt text,
+  slug text unique,
+  status text not null default 'draft',
+  published_at timestamptz null,
+  category text null,
+  template_variant text null,
+  design_seed text null,
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  constraint projects_status_check check (status in ('draft', 'published', 'unpublished'))
 );
+
+alter table public.projects
+  add column if not exists slug text unique;
+
+alter table public.projects
+  add column if not exists status text not null default 'draft';
+
+alter table public.projects
+  add column if not exists published_at timestamptz null;
+
+alter table public.projects
+  add column if not exists category text null;
+
+alter table public.projects
+  add column if not exists template_variant text null;
+
+alter table public.projects
+  add column if not exists design_seed text null;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint where conname = 'projects_status_check'
+  ) then
+    alter table public.projects
+      add constraint projects_status_check
+      check (status in ('draft', 'published', 'unpublished'));
+  end if;
+end $$;
 
 create table if not exists public.project_files (
   id uuid primary key default gen_random_uuid(),
@@ -62,6 +98,13 @@ create table if not exists public.template_examples (
 
 create index if not exists project_files_project_id_idx
   on public.project_files(project_id);
+
+create unique index if not exists projects_slug_unique_idx
+  on public.projects(slug)
+  where slug is not null;
+
+create index if not exists projects_status_idx
+  on public.projects(status);
 
 create index if not exists generation_logs_category_idx
   on public.generation_logs(category);

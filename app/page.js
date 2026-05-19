@@ -25,6 +25,18 @@ const promptExamples = [
   "Portfolio",
 ];
 
+const designStyleOptions = [
+  { label: "Auto", value: "" },
+  { label: "Editorial Luxury", value: "staging_editorial_luxury" },
+  { label: "Portfolio Gallery", value: "staging_portfolio_gallery" },
+  { label: "Realtor Conversion", value: "staging_realtor_conversion" },
+  { label: "Minimal Boutique", value: "staging_minimal_boutique" },
+];
+
+const homeStagingVariants = designStyleOptions
+  .map((option) => option.value)
+  .filter(Boolean);
+
 const examplePrompts = {
   "Staffing agency":
     "Build a modern staffing agency website for employers and job seekers",
@@ -42,6 +54,13 @@ function createHistoryItem(project, originalPrompt) {
     title: project.title || "Untitled website",
     prompt: originalPrompt,
     files: project.files || [],
+    category: project.category || "",
+    templateVariant: project.templateVariant || "",
+    designSeed: project.designSeed || "",
+    imageSetUsed: project.imageSetUsed || [],
+    slug: project.slug || "",
+    status: project.status || "draft",
+    publishedAt: project.publishedAt || "",
     createdAt: new Date().toISOString(),
   };
 }
@@ -67,6 +86,10 @@ export default function Home() {
   const [notice, setNotice] = useState("");
   const [loadingAction, setLoadingAction] = useState("");
   const [previewUrl, setPreviewUrl] = useState("");
+  const [liveUrl, setLiveUrl] = useState("");
+  const [currentProjectId, setCurrentProjectId] = useState("");
+  const [previewVersion, setPreviewVersion] = useState(0);
+  const [forcedVariant, setForcedVariant] = useState("");
 
   const hasFiles = useMemo(() => {
     return Array.isArray(project?.files) && project.files.length > 0;
@@ -74,7 +97,14 @@ export default function Home() {
 
   const effectivePreviewUrl =
     previewUrl ||
-    (mounted && project?.id ? `${window.location.origin}/preview/${project.id}` : "");
+    (mounted && currentProjectId
+      ? `${window.location.origin}/preview/${currentProjectId}`
+      : "");
+  const effectiveLiveUrl =
+    liveUrl ||
+    (mounted && project?.slug && project?.status === "published"
+      ? `${window.location.origin}/site/${project.slug}`
+      : "");
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -125,6 +155,13 @@ export default function Home() {
             title: item.title,
             prompt: item.original_prompt || "Saved project",
             files: [],
+            category: "",
+            templateVariant: "",
+            designSeed: "",
+            imageSetUsed: [],
+            slug: "",
+            status: "draft",
+            publishedAt: "",
             createdAt: item.created_at,
             savedOnly: true,
           }));
@@ -139,13 +176,14 @@ export default function Home() {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 120000);
     let response;
-    const requestUrl = `${url}?payload=${encodeURIComponent(
-      JSON.stringify(body),
-    )}`;
 
     try {
-      response = await fetch(requestUrl, {
+      response = await fetch(url, {
         method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
         signal: controller.signal,
       });
     } catch (err) {
@@ -175,7 +213,7 @@ export default function Home() {
     ].slice(0, 12));
   }
 
-  async function handleGenerate() {
+  async function handleGenerate(options = {}) {
     setError("");
     setNotice("");
 
@@ -187,11 +225,20 @@ export default function Home() {
     setLoadingAction("generate");
     setViewMode("preview");
     setPreviewUrl("");
+    setLiveUrl("");
+    setCurrentProjectId("");
     try {
+      const designSeed = crypto.randomUUID();
+      const requestedVariant =
+        options.forcedVariant === undefined ? forcedVariant : options.forcedVariant;
       const nextProject = await requestJson("/api/generate-website", {
         prompt: prompt.trim(),
+        websiteType: "home_staging",
+        designSeed,
+        forcedVariant: requestedVariant,
       });
       setProject(nextProject);
+      setPreviewVersion((value) => value + 1);
       upsertHistory(nextProject, prompt.trim());
     } catch (err) {
       setError(err.message);
@@ -200,7 +247,24 @@ export default function Home() {
     }
   }
 
+  function handleRegenerateVariation() {
+    if (!prompt.trim()) {
+      setError("Describe the website you want to build before regenerating a variation.");
+      return;
+    }
+
+    const currentVariant = project?.templateVariant || "";
+    const currentIndex = homeStagingVariants.indexOf(currentVariant);
+    const nextVariant =
+      project?.category === "home_staging" && currentIndex >= 0
+        ? homeStagingVariants[(currentIndex + 1) % homeStagingVariants.length]
+        : "";
+
+    handleGenerate({ forcedVariant: nextVariant });
+  }
+
   async function handleEdit() {
+    console.log("Apply edit clicked");
     setError("");
     setNotice("");
 
@@ -214,19 +278,124 @@ export default function Home() {
       return;
     }
 
+    const appFile = project.files.find(
+      (file) =>
+        file.path === "/App.js" ||
+        file.path === "App.js" ||
+        file.path === "/App.jsx",
+    );
+    const cssFile = project.files.find(
+      (file) => file.path === "/styles.css" || file.path === "styles.css",
+    );
+
+    if (!appFile || !cssFile) {
+      setError("Current website files must include /App.js and /styles.css.");
+      return;
+    }
+
+    const previousProject = project;
+    const previousTitle = project.title;
+    const previousFiles = project.files;
+    const editInstruction = instruction.trim();
+
+    console.log("Edit instruction:", editInstruction);
+    console.log("Files before edit:", previousFiles);
+
     setLoadingAction("edit");
     setPreviewUrl("");
+    setLiveUrl("");
     try {
-      const updatedProject = await requestJson("/api/edit-website", {
-        instruction: instruction.trim(),
-        currentFiles: project.files,
-        projectId: project.id,
-      });
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 120000);
+      let response;
+
+      try {
+        response = await fetch("/api/edit-website", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            instruction: editInstruction,
+            currentTitle: previousTitle,
+            currentFiles: previousFiles,
+            originalPrompt: prompt,
+            prompt,
+            websiteType: project.category,
+            category: project.category,
+            templateVariant: project.templateVariant,
+            designSeed: project.designSeed,
+            imageSetUsed: project.imageSetUsed,
+            projectId: project.id,
+          }),
+          signal: controller.signal,
+        });
+      } catch (err) {
+        if (err.name === "AbortError") {
+          throw new Error("The AI edit request timed out. Please try again.");
+        }
+        throw err;
+      } finally {
+        clearTimeout(timeout);
+      }
+
+      const data = await response.json().catch(() => ({}));
+      console.log("Edit API response:", data);
+
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to apply edit");
+      }
+
+      const nextFiles = Array.isArray(data.files) ? data.files : [];
+      const nextAppFile = nextFiles.find(
+        (file) =>
+          file.path === "/App.js" ||
+          file.path === "App.js" ||
+          file.path === "/App.jsx",
+      );
+      const nextCssFile = nextFiles.find(
+        (file) => file.path === "/styles.css" || file.path === "styles.css",
+      );
+
+      if (!data.title || !nextAppFile?.content || !nextCssFile?.content) {
+        throw new Error("Edit response did not include complete website files.");
+      }
+
+      const updatedProject = {
+        ...project,
+        ...data,
+        id: project.id,
+        title: data.title,
+        files: nextFiles,
+        category: data.category || project.category,
+        templateVariant: data.templateVariant || project.templateVariant,
+        designSeed: data.designSeed || project.designSeed,
+        imageSetUsed: data.imageSetUsed || project.imageSetUsed,
+        slug: "",
+        status: "draft",
+        publishedAt: "",
+        generationLogId: project.generationLogId,
+        editLogId: data.editLogId || project.editLogId,
+      };
+
       setProject(updatedProject);
       setInstruction("");
+      setPreviewVersion((value) => value + 1);
+      setNotice(data.message || "Edit applied.");
       upsertHistory(updatedProject, prompt.trim() || "AI edit");
     } catch (err) {
-      setError(err.message);
+      setProject(previousProject);
+      setPreviewVersion((value) => value + 1);
+      const validationFailure = /not applied|did not preserve|validation|requested change/i.test(
+        err.message || "",
+      );
+      setError(
+        validationFailure
+          ? "Edit failed. The requested change was not applied, so your previous design was kept."
+          : `Edit failed. Your previous design was kept.${
+              err.message ? ` ${err.message}` : ""
+            }`,
+      );
     } finally {
       setLoadingAction("");
     }
@@ -254,14 +423,21 @@ export default function Home() {
         .insert({
           title: project.title || "Untitled website",
           original_prompt: prompt.trim(),
+          status: "draft",
+          category: project.category || null,
+          template_variant: project.templateVariant || null,
+          design_seed: project.designSeed || null,
           updated_at: now,
         })
-        .select("id")
+        .select("*")
         .single();
 
       if (projectError) {
         throw projectError;
       }
+
+      console.log("Saved Supabase project:", savedProject);
+      console.log("Setting currentProjectId:", savedProject.id);
 
       const files = project.files.map((file) => ({
         project_id: savedProject.id,
@@ -289,10 +465,16 @@ export default function Home() {
         ...project,
         id: savedProject.id,
         files: project.files,
+        slug: savedProject.slug || "",
+        status: savedProject.status || "draft",
+        publishedAt: savedProject.published_at || "",
       };
       const nextPreviewUrl = `${window.location.origin}/preview/${savedProject.id}`;
+      setError("");
       setProject(savedWithId);
+      setCurrentProjectId(savedProject.id);
       setPreviewUrl(nextPreviewUrl);
+      setLiveUrl("");
       upsertHistory(savedWithId, prompt.trim() || project.title || "Saved project");
       setNotice("Project saved. Preview link is ready.");
     } catch (err) {
@@ -332,6 +514,94 @@ export default function Home() {
     }
 
     window.open(effectivePreviewUrl, "_blank", "noopener,noreferrer");
+  }
+
+  async function handlePublish() {
+    setError("");
+    setNotice("");
+
+    const publishProjectId = currentProjectId || project?.id || "";
+    console.log("Publishing projectId:", publishProjectId);
+
+    if (!publishProjectId) {
+      setError("Save first, then publish to create a live website URL.");
+      return;
+    }
+
+    setLoadingAction("publish");
+
+    try {
+      const data = await requestJson("/api/publish-project", {
+        projectId: publishProjectId,
+      });
+      const publishedProject = {
+        ...project,
+        slug: data.slug,
+        status: data.status || "published",
+        publishedAt: data.publishedAt || "",
+      };
+
+      setProject(publishedProject);
+      setLiveUrl(data.liveUrl || `${window.location.origin}/site/${data.slug}`);
+      upsertHistory(publishedProject, prompt.trim() || project.title || "Published project");
+      setNotice("Your website is live.");
+    } catch (err) {
+      setError(err.message || "Could not publish this project.");
+    } finally {
+      setLoadingAction("");
+    }
+  }
+
+  async function handleUnpublish() {
+    setError("");
+    setNotice("");
+
+    const publishProjectId = currentProjectId || project?.id || "";
+
+    if (!publishProjectId) {
+      setError("Save the project before changing publish status.");
+      return;
+    }
+
+    setLoadingAction("unpublish");
+
+    try {
+      const data = await requestJson("/api/unpublish-project", {
+        projectId: publishProjectId,
+      });
+      const unpublishedProject = {
+        ...project,
+        status: data.status || "unpublished",
+      };
+
+      setProject(unpublishedProject);
+      setLiveUrl("");
+      upsertHistory(unpublishedProject, prompt.trim() || project.title || "Unpublished project");
+      setNotice("Website unpublished.");
+    } catch (err) {
+      setError(err.message || "Could not unpublish this project.");
+    } finally {
+      setLoadingAction("");
+    }
+  }
+
+  async function handleCopyLiveLink() {
+    if (!effectiveLiveUrl) {
+      setError("Publish the website first to create a live URL.");
+      return;
+    }
+
+    await navigator.clipboard.writeText(effectiveLiveUrl);
+    setNotice("Live link copied.");
+  }
+
+  function handleOpenLiveWebsite() {
+    if (!effectiveLiveUrl) {
+      setError("Publish the website first to create a live URL.");
+      return;
+    }
+
+    window.open(effectiveLiveUrl, "_blank", "noopener,noreferrer");
   }
 
   async function handleFeedback(feedback, rating = 3) {
@@ -388,7 +658,11 @@ export default function Home() {
     setError("");
     setNotice("");
     setPreviewUrl("");
+    setLiveUrl("");
+    setCurrentProjectId("");
     setViewMode("preview");
+    setPreviewVersion((value) => value + 1);
+    setForcedVariant("");
   }
 
   async function selectHistoryItem(item) {
@@ -423,17 +697,42 @@ export default function Home() {
             path: file.file_path,
             content: file.file_content,
           })),
+          category: item.category || "",
+          templateVariant: item.templateVariant || "",
+          designSeed: item.designSeed || "",
+          imageSetUsed: item.imageSetUsed || [],
+          slug: item.slug || "",
+          status: item.status || "draft",
+          publishedAt: item.publishedAt || "",
         };
 
         setProject(loadedProject);
+        setCurrentProjectId(loadedProject.id);
         setPreviewUrl(`${window.location.origin}/preview/${loadedProject.id}`);
+        setLiveUrl(
+          loadedProject.slug && loadedProject.status === "published"
+            ? `${window.location.origin}/site/${loadedProject.slug}`
+            : "",
+        );
         setPrompt(item.prompt);
         setActiveHistoryId(item.id);
         setViewMode("preview");
+        setPreviewVersion((value) => value + 1);
         setHistory((current) =>
           current.map((entry) =>
             entry.id === item.id
-              ? { ...entry, files: loadedProject.files, savedOnly: false }
+              ? {
+                  ...entry,
+                  files: loadedProject.files,
+                  category: loadedProject.category,
+                  templateVariant: loadedProject.templateVariant,
+                  designSeed: loadedProject.designSeed,
+                  imageSetUsed: loadedProject.imageSetUsed,
+                  slug: loadedProject.slug,
+                  status: loadedProject.status,
+                  publishedAt: loadedProject.publishedAt,
+                  savedOnly: false,
+                }
               : entry,
           ),
         );
@@ -446,15 +745,33 @@ export default function Home() {
     }
 
     const nextProjectId = item.projectId || "";
-    setProject({ id: nextProjectId, title: item.title, files: item.files });
+    setCurrentProjectId(nextProjectId);
+    setProject({
+      id: nextProjectId,
+      title: item.title,
+      files: item.files,
+      category: item.category || "",
+      templateVariant: item.templateVariant || "",
+      designSeed: item.designSeed || "",
+      imageSetUsed: item.imageSetUsed || [],
+      slug: item.slug || "",
+      status: item.status || "draft",
+      publishedAt: item.publishedAt || "",
+    });
     setPreviewUrl(
       nextProjectId ? `${window.location.origin}/preview/${nextProjectId}` : "",
+    );
+    setLiveUrl(
+      item.slug && item.status === "published"
+        ? `${window.location.origin}/site/${item.slug}`
+        : "",
     );
     setPrompt(item.prompt);
     setActiveHistoryId(item.id);
     setViewMode("preview");
     setError("");
     setNotice("");
+    setPreviewVersion((value) => value + 1);
   }
 
   function formatProjectDate(value) {
@@ -466,6 +783,7 @@ export default function Home() {
   }
 
   const isBusy = Boolean(loadingAction);
+  const showDesignDebug = process.env.NODE_ENV === "development";
 
   return (
     <main className="min-h-screen overflow-hidden bg-[#f6f2ea] font-sans text-[#111827]">
@@ -607,6 +925,31 @@ export default function Home() {
                   </button>
                 </div>
 
+                <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <label className="flex items-center gap-2 text-xs font-medium text-[#6b7280]">
+                    Design style
+                    <select
+                      value={forcedVariant}
+                      onChange={(event) => setForcedVariant(event.target.value)}
+                      className="h-8 rounded-full border border-black/5 bg-white px-3 text-xs text-[#111827] outline-none transition-shadow duration-150 focus:shadow-[0_0_0_4px_rgba(37,99,235,0.10)]"
+                    >
+                      {designStyleOptions.map((option) => (
+                        <option key={option.label} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={handleRegenerateVariation}
+                    disabled={isBusy || !prompt.trim()}
+                    className="inline-flex h-8 items-center justify-center rounded-full border border-black/5 bg-white px-3 text-xs font-medium text-[#111827] shadow-sm transition-shadow duration-150 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Regenerate Variation
+                  </button>
+                </div>
+
                 <div className="mt-2 flex flex-wrap gap-2">
                   {promptExamples.map((example) => (
                     <button
@@ -652,36 +995,84 @@ export default function Home() {
                         Open Preview
                       </button>
                     )}
+                    {effectiveLiveUrl && (
+                      <button
+                        type="button"
+                        onClick={handleOpenLiveWebsite}
+                        className="inline-flex h-7 items-center gap-1.5 rounded-full bg-[#111827] px-3 text-xs font-medium text-white shadow-sm transition-colors duration-150 hover:bg-black"
+                      >
+                        <ExternalLink className="size-3.5" />
+                        View Published Site
+                      </button>
+                    )}
+                    {showDesignDebug && project?.category && (
+                      <span className="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-[#6b7280] ring-1 ring-black/5">
+                        {project.category.replaceAll("_", " ")}
+                      </span>
+                    )}
+                    {showDesignDebug && project?.templateVariant && (
+                      <span className="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-[#6b7280] ring-1 ring-black/5">
+                        {project.templateVariant.replaceAll("_", " ")}
+                      </span>
+                    )}
                   </div>
                   <p className="mt-1 text-sm text-[#6b7280]">
                     Generated React landing page.
                   </p>
                 </div>
-                <div className="inline-flex rounded-full border border-black/5 bg-white/85 p-1 shadow-sm backdrop-blur">
-                  <button
-                    type="button"
-                    onClick={() => setViewMode("preview")}
-                    className={`inline-flex h-9 items-center gap-2 rounded-lg px-3 text-sm font-medium transition-colors duration-150 ${
-                      viewMode === "preview"
-                        ? "bg-[#111827] text-white"
-                        : "text-[#6b7280] hover:bg-[#f7f4ef] hover:text-[#111827]"
-                    }`}
-                  >
-                    <Eye className="size-4" />
-                    Preview
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setViewMode("code")}
-                    className={`inline-flex h-9 items-center gap-2 rounded-lg px-3 text-sm font-medium transition-colors duration-150 ${
-                      viewMode === "code"
-                        ? "bg-[#111827] text-white"
-                        : "text-[#6b7280] hover:bg-[#f7f4ef] hover:text-[#111827]"
-                    }`}
-                  >
-                    <Code2 className="size-4" />
-                    Code
-                  </button>
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  {hasFiles && (
+                    effectiveLiveUrl ? (
+                      <button
+                        type="button"
+                        onClick={handleOpenLiveWebsite}
+                        className="inline-flex h-10 items-center gap-2 rounded-full bg-[#111827] px-4 text-sm font-medium text-white shadow-sm transition-colors duration-150 hover:bg-black"
+                      >
+                        <ExternalLink className="size-4" />
+                        View Published Site
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={currentProjectId ? handlePublish : handleSave}
+                        disabled={isBusy}
+                        className="inline-flex h-10 items-center gap-2 rounded-full bg-[#111827] px-4 text-sm font-medium text-white shadow-sm transition-colors duration-150 hover:bg-black disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {loadingAction === "publish" || loadingAction === "save" ? (
+                          <Loader2 className="size-4 animate-spin" />
+                        ) : (
+                          <ExternalLink className="size-4" />
+                        )}
+                        {currentProjectId ? "Publish Website" : "Save Project First"}
+                      </button>
+                    )
+                  )}
+                  <div className="inline-flex rounded-full border border-black/5 bg-white/85 p-1 shadow-sm backdrop-blur">
+                    <button
+                      type="button"
+                      onClick={() => setViewMode("preview")}
+                      className={`inline-flex h-9 items-center gap-2 rounded-lg px-3 text-sm font-medium transition-colors duration-150 ${
+                        viewMode === "preview"
+                          ? "bg-[#111827] text-white"
+                          : "text-[#6b7280] hover:bg-[#f7f4ef] hover:text-[#111827]"
+                      }`}
+                    >
+                      <Eye className="size-4" />
+                      Preview
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setViewMode("code")}
+                      className={`inline-flex h-9 items-center gap-2 rounded-lg px-3 text-sm font-medium transition-colors duration-150 ${
+                        viewMode === "code"
+                          ? "bg-[#111827] text-white"
+                          : "text-[#6b7280] hover:bg-[#f7f4ef] hover:text-[#111827]"
+                      }`}
+                    >
+                      <Code2 className="size-4" />
+                      Code
+                    </button>
+                  </div>
                 </div>
               </div>
 
@@ -711,6 +1102,72 @@ export default function Home() {
                     >
                       <LinkIcon className="size-3.5" />
                       Copy Link
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {hasFiles && effectivePreviewUrl && !effectiveLiveUrl && (
+                <div className="flex flex-col gap-3 rounded-2xl border border-black/5 bg-white/80 p-3 shadow-sm sm:flex-row sm:items-center">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold text-[#111827]">
+                      Save first, then publish to create a live website URL.
+                    </p>
+                    <p className="mt-1 text-xs leading-5 text-[#6b7280]">
+                      Preview links are for testing. Published sites live at
+                      /site/website-slug.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handlePublish}
+                    disabled={isBusy || !currentProjectId}
+                    className="inline-flex h-9 shrink-0 items-center gap-2 rounded-full bg-[#111827] px-4 text-xs font-medium text-white transition-colors duration-150 hover:bg-black disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {loadingAction === "publish" ? (
+                      <Loader2 className="size-3.5 animate-spin" />
+                    ) : (
+                      <ExternalLink className="size-3.5" />
+                    )}
+                    Publish Website
+                  </button>
+                </div>
+              )}
+
+              {effectiveLiveUrl && (
+                <div className="flex flex-col gap-3 rounded-2xl border border-emerald-100 bg-emerald-50/80 p-3 shadow-sm sm:flex-row sm:items-center">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold text-[#111827]">
+                      Your website is live
+                    </p>
+                    <p className="mt-1 truncate text-xs text-emerald-700">
+                      {effectiveLiveUrl}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={handleOpenLiveWebsite}
+                      className="inline-flex h-9 items-center gap-2 rounded-full bg-[#111827] px-4 text-xs font-medium text-white transition-colors duration-150 hover:bg-black"
+                    >
+                      <ExternalLink className="size-3.5" />
+                      View Published Site
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleCopyLiveLink}
+                      className="inline-flex h-9 items-center gap-2 rounded-full border border-black/5 bg-white px-4 text-xs font-medium text-[#111827] shadow-sm transition-shadow duration-150 hover:shadow-md"
+                    >
+                      <LinkIcon className="size-3.5" />
+                      Copy Live Link
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleUnpublish}
+                      disabled={isBusy}
+                      className="inline-flex h-9 items-center gap-2 rounded-full border border-black/5 bg-white px-4 text-xs font-medium text-[#111827] shadow-sm transition-shadow duration-150 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Unpublish
                     </button>
                   </div>
                 </div>
@@ -781,7 +1238,7 @@ export default function Home() {
                 </div>
               )}
 
-              {isBusy ? (
+              {loadingAction === "generate" || loadingAction === "load" ? (
                 <div className="flex h-[calc(100vh-285px)] min-h-[520px] items-center justify-center rounded-[1.5rem] border border-black/5 bg-white/86 p-6 shadow-[0_24px_70px_rgba(42,31,18,0.09)] ring-1 ring-white/70 backdrop-blur">
                   <div className="max-w-sm text-center">
                     <div className="mx-auto mb-5 flex size-12 items-center justify-center rounded-2xl bg-[#111827] text-white shadow-lg shadow-slate-300/70">
@@ -803,6 +1260,7 @@ export default function Home() {
                   title={project.title}
                   viewMode={viewMode}
                   onCopyCode={handleCopyCode}
+                  previewVersion={previewVersion}
                 />
               ) : (
                 <EmptyState
@@ -842,6 +1300,69 @@ export default function Home() {
                         Copy Link
                       </button>
                     </div>
+                  </div>
+                )}
+
+                {effectiveLiveUrl && (
+                  <div className="mb-3 flex flex-col gap-2 border-b border-black/5 pb-3 text-sm text-[#6b7280] lg:flex-row lg:items-center">
+                    <span className="font-medium text-[#111827]">
+                      Live website
+                    </span>
+                    <code className="min-w-0 flex-1 truncate rounded-full bg-emerald-50 px-3 py-1 text-xs text-emerald-700">
+                      {effectiveLiveUrl}
+                    </code>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={handleOpenLiveWebsite}
+                        className="inline-flex h-8 items-center gap-2 rounded-full bg-[#111827] px-3 text-xs font-medium text-white transition-colors duration-150 hover:bg-black"
+                      >
+                        <ExternalLink className="size-3.5" />
+                        View Published Site
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleCopyLiveLink}
+                        className="inline-flex h-8 items-center gap-2 rounded-full border border-black/5 bg-white px-3 text-xs font-medium text-[#111827] transition-shadow duration-150 hover:shadow-md"
+                      >
+                        <LinkIcon className="size-3.5" />
+                        Copy Live Link
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleUnpublish}
+                        disabled={isBusy}
+                        className="inline-flex h-8 items-center gap-2 rounded-full border border-black/5 bg-white px-3 text-xs font-medium text-[#111827] transition-shadow duration-150 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        Unpublish
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {effectivePreviewUrl && !effectiveLiveUrl && (
+                  <div className="mb-3 flex flex-col gap-2 rounded-2xl bg-[#fbfaf8] px-4 py-3 text-sm text-[#6b7280] lg:flex-row lg:items-center lg:justify-between">
+                    <div>
+                      <p className="font-medium text-[#111827]">
+                        Publish to create a real live website URL.
+                      </p>
+                      <p className="mt-1 text-xs">
+                        Preview stays at /preview/projectId. Published sites use /site/website-slug.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handlePublish}
+                      disabled={isBusy || !currentProjectId}
+                      className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-full bg-[#111827] px-4 text-xs font-medium text-white transition-colors duration-150 hover:bg-black disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {loadingAction === "publish" ? (
+                        <Loader2 className="size-3.5 animate-spin" />
+                      ) : (
+                        <ExternalLink className="size-3.5" />
+                      )}
+                      Publish Website
+                    </button>
                   </div>
                 )}
 
@@ -893,6 +1414,24 @@ export default function Home() {
                     >
                       <Save className="size-4" />
                       Save
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleOpenLiveWebsite}
+                      disabled={!effectiveLiveUrl}
+                      title={
+                        effectiveLiveUrl
+                          ? "Open the published website"
+                          : "Publish the website first"
+                      }
+                      className={`inline-flex h-10 items-center gap-2 rounded-full px-4 text-sm font-medium transition-shadow duration-150 ${
+                        effectiveLiveUrl
+                          ? "bg-[#111827] text-white hover:bg-black"
+                          : "cursor-not-allowed border border-black/5 bg-white text-[#9ca3af]"
+                      }`}
+                    >
+                      <ExternalLink className="size-4" />
+                      View Published Site
                     </button>
                     <button
                       type="button"

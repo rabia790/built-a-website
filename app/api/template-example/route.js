@@ -24,8 +24,7 @@ export async function POST(request) {
   }
 
   try {
-    const queryPayload = new URL(request.url).searchParams.get("payload");
-    const rawBody = queryPayload ? JSON.parse(queryPayload) : await request.json();
+    const rawBody = await request.json();
     const body = requestSchema.parse(rawBody);
     const category =
       body.category && body.category !== "ai_generated"

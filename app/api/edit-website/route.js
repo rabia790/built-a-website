@@ -1,133 +1,177 @@
-import { z } from "zod";
-import {
-  ensureImagesInGeneratedCode,
-  hasRemoteImageReference,
-  shouldIncludeImages,
-} from "@/lib/fixBrokenImagePaths";
+import { generateText } from "ai";
+import { groq } from "@ai-sdk/groq";
+import { applySimpleEdit, hasSimpleEditSignal } from "@/lib/applySimpleEdit";
+import { ensureImagesInGeneratedCode } from "@/lib/fixBrokenImagePaths";
 import { parseWebsiteResponse } from "@/lib/parseWebsiteResponse";
 import { safeInsert } from "@/lib/serverSupabase";
 import { validateWebsiteQuality } from "@/lib/validateWebsiteQuality";
 
-const fileSchema = z.object({
-  path: z.string().min(1),
-  content: z.string().min(1),
-});
-
-const requestSchema = z.object({
-  instruction: z.string().trim().min(1, "Edit instruction is required."),
-  currentFiles: z.array(fileSchema).min(1, "Current website files are required."),
-  projectId: z.string().optional(),
-});
-
 const AI_TIMEOUT_MS = 45000;
 
-const systemPrompt = `You edit existing React/Tailwind websites for an iframe React preview.
-
-Return the full updated website using exactly this separator format and nothing else:
-
-TITLE:
-Website title here
-
----APP_JS---
-React code here
-
----STYLES_CSS---
-CSS code here
-
-Rules:
-- Do not return JSON.
-- Do not return markdown.
-- Do not wrap code in triple backticks.
-- Do not explain anything.
-- Return only the separator format.
-- Never make the website more generic.
-- Preserve or improve the brand specificity, realistic copy, visual hierarchy, navigation, sections, CTA buttons, cards, stats, testimonials, and contact section.
-- The hero section must be visually strong and appear first.
-- Do not start the page with Services, About, Features, or pricing.
-- Always include a modern hero with headline, subheadline, CTA, trust signal, and visual element.
-- Hero must look premium and visually interesting.
-- Do not generate plain centered hero text only.
-- Add visual cards, stats, trust badges, and a stronger CTA section.
-- Every generated website must include at least one strong visual image in the hero section unless the user specifically says no images.
-- Hero section should usually be a split layout: left side headline, subheadline, CTAs, and stats; right side large image card or visual image collage.
-- Use proper img attributes: src, alt, className, and loading="lazy".
-- Use only full remote image URLs.
-- Do not use local image paths like /image1.jpg, /hero.jpg, /gallery.jpg, or /office.jpg.
-- Use curated Unsplash image URLs based on business type.
-- For staffing/company/office use: https://images.unsplash.com/photo-1497366754035-f200968a6e72?auto=format&fit=crop&w=1200&q=80
-- For SaaS/tech use: https://images.unsplash.com/photo-1551434678-e076c223a692?auto=format&fit=crop&w=1200&q=80
-- For restaurant use: https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?auto=format&fit=crop&w=1200&q=80
-- For home staging/interior use: https://images.unsplash.com/photo-1600607687939-ce8a6c25118c?auto=format&fit=crop&w=1200&q=80
-- For wedding/photography use: https://images.unsplash.com/photo-1519741497674-611481863552?auto=format&fit=crop&w=1200&q=80
-- For portfolio/brand designer use: https://images.unsplash.com/photo-1497366811353-6870744d04b2?auto=format&fit=crop&w=1200&q=80
-- Use polished spacing and layout.
-- Generated website must look like a premium modern landing page.
-- Avoid old-looking centered heroes with plain gray blocks.
-- Avoid plain centered gray blocks anywhere in the page.
-- Avoid generic navigation labels and generic headings.
-- Avoid "Welcome to..." copy.
-- Use strong business-specific copy.
-- Use elegant section spacing.
-- Use modern cards, stats, testimonials, CTAs, and proof points.
-- Use good visual hierarchy with clear content rhythm.
-- Use refined colors based on the business type.
-- Use CSS gradients only subtly.
-- Use modern font sizing and generous line height.
-- Make the design look like a real agency, SaaS, service, or portfolio website.
-- Make the design look like a real premium website, not a beginner template.
-- For staffing websites, include an employer/candidate split, industries served, hiring stats, and process cards.
-- For staffing websites, avoid generic headings like "Find the Right Fit".
-- For staffing websites, use stronger copy such as "Hire reliable talent without slowing down your business" or "Flexible staffing solutions for growing teams".
-- Prefer polished layout over too many sections.
-- Use responsive design.
-- Put all React code inside APP_JS.
-- Put all CSS inside STYLES_CSS.
-- Preserve the current website unless the instruction requires changes.
-- Do not use imports.
-- Do not use export default inline anonymous function.
-- Must define function App().
-- End with export default App.
-- Keep all components in /App.js.
-- Keep CSS in /styles.css.
-- Do not import external packages.
-- Do not use local image paths like /image1.jpg, /image2.jpg, /hero.jpg, /gallery.jpg, /restaurant.jpg, or /office.jpg.
-- Do not reference images from the public folder unless they already exist.
-- Use full remote image URLs only.
-- Use images.unsplash.com URLs when images are needed.
-- If no image is needed, use gradient blocks, cards, SVG icons, and styled placeholders.
-- Never generate broken local image paths.
-- Do not import lucide-react.
-- Do not import next/image.
-- Do not import next/link.
-- Do not import local components.
-- Do not import local files, assets, or CSS from /App.js.
-- Do not use external libraries.
-- Use normal JSX.
-- Use inline SVG icons if icons are needed.
-- Tailwind classes are allowed.
-- Use custom CSS if needed.
-- Keep the website responsive and modern.
-
-Before writing code, silently check:
-- Is the design specific to the business?
-- Is the copy realistic?
-- Does the page look premium?
-- Does it have enough sections?
-- Is it better than a generic template?
-
-Do not output this thinking. Only output the separator format.`;
-
-async function readRequestPayload(request) {
-  const queryPayload = new URL(request.url).searchParams.get("payload");
-
-  if (queryPayload) {
-    return JSON.parse(queryPayload);
-  }
-
-  return JSON.parse(await request.text());
+function findFile(files, acceptedPaths) {
+  return files.find((file) => acceptedPaths.includes(file.path));
 }
 
-function postProcessWebsiteImages(website, promptContext) {
+function getFileContent(files, acceptedPaths) {
+  return findFile(files, acceptedPaths)?.content || "";
+}
+
+function getWebsiteCode(website) {
+  return {
+    appCode: getFileContent(website.files || [], ["/App.js", "App.js", "/App.jsx"]),
+    cssCode: getFileContent(website.files || [], ["/styles.css", "styles.css"]),
+  };
+}
+
+function extractRemoteImages(code = "") {
+  return String(code).match(/https?:\/\/[^"')\s]+/g)?.filter((url) =>
+    /images\.unsplash\.com|\.jpg|\.jpeg|\.png|\.webp|\.avif|\.svg/i.test(url),
+  ) || [];
+}
+
+function extractPageNames(code = "") {
+  const matches = String(code).match(/function\s+([A-Z][A-Za-z0-9]*Page)\s*\(/g) || [];
+  return matches.map((match) =>
+    match.replace(/^function\s+/, "").replace(/\s*\($/, ""),
+  );
+}
+
+function isHeroHeadlineBlackEdit(instruction = "") {
+  const text = String(instruction || "").toLowerCase();
+  return (
+    text.includes("hero") &&
+    text.includes("headline") &&
+    text.includes("color") &&
+    text.includes("black")
+  );
+}
+
+function isHeroHeadlineFontSizeEdit(instruction = "") {
+  const text = String(instruction || "").toLowerCase();
+  const mentionsHeadline =
+    text.includes("hero") ||
+    text.includes("headline") ||
+    text.includes("connect growing companies");
+
+  return (
+    mentionsHeadline &&
+    (text.includes("font size") ||
+      text.includes("bigger") ||
+      text.includes("larger") ||
+      /\d{2,4}\s*px/i.test(text))
+  );
+}
+
+function buildWebsiteFromCode(baseWebsite, appCode, cssCode) {
+  return {
+    ...baseWebsite,
+    files: [
+      { path: "/App.js", content: appCode },
+      { path: "/styles.css", content: cssCode },
+    ],
+  };
+}
+
+function buildEditPrompt({
+  currentTitle,
+  instruction,
+  appCode,
+  cssCode,
+  prompt,
+  category,
+  websiteType,
+  templateVariant,
+  designSeed,
+  imageSetUsed,
+  validationErrors = [],
+}) {
+  const validationBlock = validationErrors.length
+    ? `\nThe previous output failed validation. Fix these issues:\n${validationErrors
+        .map((issue) => `- ${issue}`)
+        .join("\n")}\n`
+    : "";
+
+  return `You are editing an existing premium website.
+
+Do not create a new website.
+Do not regenerate from scratch.
+This is a targeted edit.
+Preserve the current layout, pages, navbar, footer, images, colors, typography, and design system.
+Apply only the requested edit.
+If the user asks to change a color, update the relevant className or CSS rule.
+If the user asks to change font size, update the relevant className or CSS rule.
+If the instruction says hero headline, find the main hero h1 text and update its color.
+Prefer stable editable targets such as data-edit-id="hero-headline" and CSS variables such as --hero-headline-size and --hero-headline-color.
+
+Current title:
+${currentTitle || "Untitled website"}
+
+Original user prompt:
+${prompt || "Not provided"}
+
+Website type:
+${category || websiteType || "Not provided"}
+
+Current template variant:
+${templateVariant || "Not provided"}
+
+Current design seed:
+${designSeed || "Not provided"}
+
+Current image set:
+${Array.isArray(imageSetUsed) && imageSetUsed.length ? imageSetUsed.join("\n") : "Not provided"}
+
+User edit instruction:
+${instruction}
+
+Current App.js:
+${appCode}
+
+Current styles.css:
+${cssCode}
+${validationBlock}
+Return the FULL updated website, not a patch.
+Return the full updated App.js and styles.css.
+
+Output format must be exactly:
+
+TITLE:
+Updated title
+
+---APP_JS---
+Full updated App.js code
+
+---STYLES_CSS---
+Full updated styles.css code
+
+Rules:
+- Do not return markdown
+- Do not explain anything
+- Do not return JSON
+- Keep all existing pages unless user asks to remove them
+- Preserve the current template variant and design structure unless the user asks for a major redesign
+- Do not collapse the website back into a simple generic about/services template
+- Do not replace the premium template/layout with a new basic website
+- Preserve current colors, typography, spacing scale, section rhythm, navbar, footer, page components, and image strategy
+- For targeted style changes, make the smallest possible App.js or styles.css change
+- Preserve React.useState multi-page navigation if it exists
+- Preserve navbar and footer
+- Apply the requested edit across the full website
+- If the user asks for pricing/packages, add or improve pricing/packages
+- If the user asks for more luxury, strengthen typography, spacing, visual hierarchy, color palette, and premium design language
+- Do not use imports
+- Do not use next/image
+- Do not use next/link
+- Do not use external packages
+- Do not import lucide-react
+- Do not import local files or local components
+- Use full remote image URLs only
+- No fake local images
+- Must define function App()
+- End App.js with export default App`;
+}
+
+function normalizeEditedWebsite(website, promptContext) {
   return {
     ...website,
     files: website.files.map((file) =>
@@ -141,24 +185,99 @@ function postProcessWebsiteImages(website, promptContext) {
   };
 }
 
-function appCodeHasRequiredImage(website, promptContext) {
-  if (!shouldIncludeImages(promptContext)) {
-    return true;
+function validateEditedWebsite(website, originalAppCode, originalCssCode, instruction = "") {
+  const { appCode, cssCode } = getWebsiteCode(website);
+  const errors = [];
+  const originalPages = new Set(extractPageNames(originalAppCode));
+  const editedPages = new Set(extractPageNames(appCode));
+  const beforeImages = extractRemoteImages(originalAppCode);
+  const afterImages = extractRemoteImages(appCode);
+  const allowsImageRemoval = /(remove|delete|no|without)\s+(image|images|photo|photos|picture|pictures)/i.test(
+    instruction,
+  );
+
+  if (!findFile(website.files || [], ["/App.js"])) {
+    errors.push("Updated files must include /App.js.");
   }
 
-  const appFile = website.files.find((file) => file.path === "/App.js");
-  return hasRemoteImageReference(appFile?.content || "");
+  if (!findFile(website.files || [], ["/styles.css"])) {
+    errors.push("Updated files must include /styles.css.");
+  }
+
+  if (!/function\s+App\s*\(/.test(appCode)) {
+    errors.push("App.js must define function App().");
+  }
+
+  if (!/export\s+default\s+App\s*;?/.test(appCode)) {
+    errors.push("App.js must end with export default App.");
+  }
+
+  if (/React\.useState\s*\(/.test(originalAppCode) && !/React\.useState\s*\(/.test(appCode)) {
+    errors.push("Preserve React.useState multi-page navigation.");
+  }
+
+  if (!cssCode.trim()) {
+    errors.push("Updated files must include styles.css content.");
+  }
+
+  if (appCode.length < Math.max(1000, originalAppCode.length * 0.65)) {
+    errors.push("Edited App.js is much shorter than the current premium website.");
+  }
+
+  if (cssCode.length < Math.max(500, originalCssCode.length * 0.65)) {
+    errors.push("Edited styles.css is much shorter than the current design system.");
+  }
+
+  if (/function\s+Navbar\s*\(/.test(originalAppCode) && !/function\s+Navbar\s*\(/.test(appCode)) {
+    errors.push("Preserve the navbar component.");
+  }
+
+  if (/function\s+Footer\s*\(/.test(originalAppCode) && !/function\s+Footer\s*\(/.test(appCode)) {
+    errors.push("Preserve the footer component.");
+  }
+
+  for (const page of originalPages) {
+    if (!editedPages.has(page)) {
+      errors.push(`Preserve existing page component ${page}.`);
+    }
+  }
+
+  if (beforeImages.length > 0 && afterImages.length === 0 && !allowsImageRemoval) {
+    errors.push("Preserve existing remote images unless the user asked to remove images.");
+  }
+
+  if (/welcome to|blog post 1|case study 1|company x|lorem ipsum/i.test(appCode)) {
+    errors.push("Edited App.js contains generic placeholder text.");
+  }
+
+  if (/(src\s*=\s*["']\/|url\(["']?\/(?:image|hero|gallery|office|restaurant))/i.test(appCode)) {
+    errors.push("Edited App.js uses fake local image paths.");
+  }
+
+  if (
+    isHeroHeadlineBlackEdit(instruction) &&
+    !hasSimpleEditSignal(appCode, cssCode, instruction)
+  ) {
+    errors.push("The requested hero headline color change to black was not applied.");
+  }
+
+  if (isHeroHeadlineFontSizeEdit(instruction)) {
+    if (!hasSimpleEditSignal(appCode, cssCode, instruction)) {
+      errors.push("The requested hero headline font size change was not applied.");
+    }
+  }
+
+  return errors;
 }
 
-function getFileContent(files, path) {
-  return files.find((file) => file.path === path)?.content || "";
-}
-
-function getWebsiteCode(website) {
-  return {
-    appCode: getFileContent(website.files || [], "/App.js"),
-    cssCode: getFileContent(website.files || [], "/styles.css"),
-  };
+async function runEditGeneration(prompt) {
+  return generateText({
+    model: groq("llama-3.3-70b-versatile"),
+    prompt,
+    temperature: 0.25,
+    abortSignal: AbortSignal.timeout(AI_TIMEOUT_MS),
+    maxRetries: 0,
+  });
 }
 
 async function logEdit({
@@ -174,8 +293,8 @@ async function logEdit({
   const log = await safeInsert("edit_logs", {
     project_id: projectId || null,
     instruction,
-    before_app_code: getFileContent(currentFiles, "/App.js"),
-    before_css_code: getFileContent(currentFiles, "/styles.css"),
+    before_app_code: getFileContent(currentFiles, ["/App.js", "App.js", "/App.jsx"]),
+    before_css_code: getFileContent(currentFiles, ["/styles.css", "styles.css"]),
     after_app_code: appCode,
     after_css_code: cssCode,
     edit_success: success,
@@ -196,77 +315,267 @@ export async function POST(request) {
   }
 
   try {
-    const body = await readRequestPayload(request);
-    const { instruction, currentFiles, projectId } = requestSchema.parse(body);
-    const [{ generateText }, { groq }] = await Promise.all([
-      import("ai"),
-      import("@ai-sdk/groq"),
-    ]);
+    const {
+      instruction,
+      currentFiles,
+      currentTitle,
+      originalPrompt,
+      prompt,
+      category,
+      websiteType,
+      templateVariant,
+      designSeed,
+      imageSetUsed,
+      projectId,
+    } = await request.json();
 
-    const editPrompt = `Edit instruction: ${instruction}
+    if (!instruction?.trim()) {
+      return Response.json({ error: "Edit instruction is required." }, { status: 400 });
+    }
 
-Current files:
-${JSON.stringify(currentFiles, null, 2)}`;
+    if (!Array.isArray(currentFiles) || currentFiles.length === 0) {
+      return Response.json(
+        { error: "Current website files are required." },
+        { status: 400 },
+      );
+    }
 
-    const { text } = await generateText({
-      model: groq("llama-3.3-70b-versatile"),
-      system: systemPrompt,
-      prompt: editPrompt,
-      temperature: 0.25,
-      abortSignal: AbortSignal.timeout(AI_TIMEOUT_MS),
-      maxRetries: 0,
+    const appFile = findFile(currentFiles, ["/App.js", "App.js", "/App.jsx"]);
+    const cssFile = findFile(currentFiles, ["/styles.css", "styles.css"]);
+
+    if (!appFile || !cssFile) {
+      return Response.json(
+        { error: "Current files must include /App.js and /styles.css." },
+        { status: 400 },
+      );
+    }
+
+    const appCode = appFile.content || "";
+    const cssCode = cssFile.content || "";
+
+    console.log("Edit instruction:", instruction);
+    console.log("Current files count:", currentFiles?.length);
+    console.log("Before App length:", appCode.length);
+    console.log("Before CSS length:", cssCode.length);
+
+    const currentCategory = category || websiteType || "";
+    const sourcePrompt = originalPrompt || prompt || "";
+    const promptContext = `${sourcePrompt}\n${currentCategory}\n${templateVariant || ""}\n${designSeed || ""}\n${instruction}`;
+    const simpleEdit = applySimpleEdit(appCode, cssCode, instruction);
+
+    if (simpleEdit.changed) {
+      let website = buildWebsiteFromCode(
+        { title: currentTitle || "Updated website" },
+        simpleEdit.appCode,
+        simpleEdit.cssCode,
+      );
+      website = normalizeEditedWebsite(website, promptContext);
+      const structureErrors = validateEditedWebsite(
+        website,
+        appCode,
+        cssCode,
+        instruction,
+      );
+      const quality = validateWebsiteQuality({
+        ...getWebsiteCode(website),
+        category: currentCategory,
+        instruction: promptContext,
+      });
+
+      if (!structureErrors.length) {
+        const validation = {
+          score: quality.score,
+          errors: quality.errors,
+        };
+        const editLogId = await logEdit({
+          projectId,
+          instruction: instruction.trim(),
+          currentFiles,
+          website,
+          validation,
+          success: true,
+        });
+
+        return Response.json({
+          ...website,
+          message: simpleEdit.message,
+          editLogId,
+          qualityScore: validation.score,
+          validationErrors: validation.errors,
+          category: currentCategory,
+          templateVariant: templateVariant || "",
+          designSeed: designSeed || "",
+          imageSetUsed: Array.isArray(imageSetUsed) ? imageSetUsed : [],
+        });
+      }
+    }
+
+    const firstPrompt = buildEditPrompt({
+      currentTitle,
+      instruction: instruction.trim(),
+      appCode,
+      cssCode,
+      prompt: sourcePrompt,
+      category: currentCategory,
+      websiteType,
+      templateVariant,
+      designSeed,
+      imageSetUsed,
     });
 
-    let website = parseWebsiteResponse(text);
+    let result = await runEditGeneration(firstPrompt);
+    console.log("Raw edit response:", result.text);
+    let website = parseWebsiteResponse(result.text);
 
     if (!website) {
-      console.error("AI response could not be parsed:", text);
+      console.error("Raw edit AI response:", result.text);
+
+      result = await runEditGeneration(
+        buildEditPrompt({
+          currentTitle,
+          instruction: instruction.trim(),
+          appCode,
+          cssCode,
+          prompt: sourcePrompt,
+          category: currentCategory,
+          websiteType,
+          templateVariant,
+          designSeed,
+          imageSetUsed,
+          validationErrors: [
+            "The response could not be parsed. Return only TITLE, ---APP_JS---, and ---STYLES_CSS--- separators.",
+          ],
+        }),
+      );
+      console.log("Raw edit response:", result.text);
+      website = parseWebsiteResponse(result.text);
+    }
+
+    if (!website) {
+      console.error("Raw edit AI response:", result.text);
       return Response.json(
         { error: "AI response could not be parsed. Please try again." },
         { status: 502 },
       );
     }
 
-    const promptContext = `${instruction}\n${JSON.stringify(currentFiles)}`;
-    website = postProcessWebsiteImages(website, promptContext);
-    let validation = validateWebsiteQuality({
-      ...getWebsiteCode(website),
+    website = normalizeEditedWebsite(website, promptContext);
+    let structureErrors = validateEditedWebsite(
+      website,
+      appCode,
+      cssCode,
       instruction,
+    );
+    let quality = validateWebsiteQuality({
+      ...getWebsiteCode(website),
+      category: currentCategory,
+      instruction: promptContext,
     });
+    let parsedCode = getWebsiteCode(website);
+    console.log("After App length:", parsedCode.appCode.length);
+    console.log("After CSS length:", parsedCode.cssCode.length);
+    console.log("Validation errors:", [...structureErrors, ...quality.errors]);
 
-    if (!appCodeHasRequiredImage(website, promptContext) || validation.score < 75) {
-      const { text: retryText } = await generateText({
-        model: groq("llama-3.3-70b-versatile"),
-        system: systemPrompt,
-        prompt: `${editPrompt}
+    if (structureErrors.length || quality.score < 75) {
+      const retryIssues = [...structureErrors, ...quality.errors];
+      result = await runEditGeneration(
+        buildEditPrompt({
+          currentTitle,
+          instruction: instruction.trim(),
+          appCode,
+          cssCode,
+          prompt: sourcePrompt,
+          category: currentCategory,
+          websiteType,
+          templateVariant,
+          designSeed,
+          imageSetUsed,
+          validationErrors: retryIssues,
+        }),
+      );
+      console.log("Raw edit response:", result.text);
 
-The edit result failed validation. Regenerate the full updated website and preserve the important structure while fixing these issues:
-${validation.errors.map((issue) => `- ${issue}`).join("\n")}
-
-If the user asked for pricing/packages, include pricing/packages. If they asked for more luxury, strengthen typography, spacing, visual hierarchy, colors, and premium design language. Include a real remote hero image when images are expected.`,
-        temperature: 0.25,
-        abortSignal: AbortSignal.timeout(AI_TIMEOUT_MS),
-        maxRetries: 0,
-      });
-
-      const retryWebsite = parseWebsiteResponse(retryText);
+      const retryWebsite = parseWebsiteResponse(result.text);
 
       if (retryWebsite) {
-        website = postProcessWebsiteImages(retryWebsite, promptContext);
-        validation = validateWebsiteQuality({
-          ...getWebsiteCode(website),
+        website = normalizeEditedWebsite(retryWebsite, promptContext);
+        structureErrors = validateEditedWebsite(
+          website,
+          appCode,
+          cssCode,
           instruction,
+        );
+        quality = validateWebsiteQuality({
+          ...getWebsiteCode(website),
+          category: currentCategory,
+          instruction: promptContext,
+        });
+        parsedCode = getWebsiteCode(website);
+        console.log("After App length:", parsedCode.appCode.length);
+        console.log("After CSS length:", parsedCode.cssCode.length);
+        console.log("Validation errors:", [...structureErrors, ...quality.errors]);
+      } else {
+        console.error("Raw edit AI response:", result.text);
+      }
+    }
+
+    if (
+      (isHeroHeadlineBlackEdit(instruction) || isHeroHeadlineFontSizeEdit(instruction)) &&
+      !hasSimpleEditSignal(
+        getWebsiteCode(website).appCode,
+        getWebsiteCode(website).cssCode,
+        instruction,
+      )
+    ) {
+      const patchedCode = applySimpleEdit(
+        getWebsiteCode(website).appCode,
+        getWebsiteCode(website).cssCode,
+        instruction,
+      );
+
+      if (patchedCode.changed) {
+        website = buildWebsiteFromCode(
+          website,
+          patchedCode.appCode,
+          patchedCode.cssCode,
+        );
+        structureErrors = validateEditedWebsite(
+          website,
+          appCode,
+          cssCode,
+          instruction,
+        );
+        quality = validateWebsiteQuality({
+          ...getWebsiteCode(website),
+          category: currentCategory,
+          instruction: promptContext,
         });
       }
     }
 
+    if (structureErrors.length || quality.score < 75) {
+      const validationErrors = [...structureErrors, ...quality.errors];
+      return Response.json(
+        {
+          error:
+            validationErrors[0] ||
+            "The edit did not preserve the required website structure.",
+        },
+        { status: 502 },
+      );
+    }
+
+    const validation = {
+      score: quality.score,
+      errors: quality.errors,
+    };
     const editLogId = await logEdit({
       projectId,
-      instruction,
+      instruction: instruction.trim(),
       currentFiles,
       website,
       validation,
-      success: validation.score >= 75,
+      success: true,
     });
 
     return Response.json({
@@ -274,12 +583,12 @@ If the user asked for pricing/packages, include pricing/packages. If they asked 
       editLogId,
       qualityScore: validation.score,
       validationErrors: validation.errors,
+      category: currentCategory,
+      templateVariant: templateVariant || "",
+      designSeed: designSeed || "",
+      imageSetUsed: Array.isArray(imageSetUsed) ? imageSetUsed : [],
     });
   } catch (error) {
-    if (error instanceof z.ZodError) {
-      return Response.json({ error: error.issues[0].message }, { status: 400 });
-    }
-
     return Response.json(
       {
         error:
@@ -287,7 +596,7 @@ If the user asked for pricing/packages, include pricing/packages. If they asked 
             ? "Groq took too long to respond. Please try a smaller edit."
             : error.message?.includes("Cannot connect to API")
               ? "Could not connect to the Groq API. Check your internet connection, API key, and Groq API access."
-            : error.message || "Groq could not edit the website.",
+              : error.message || "Groq could not edit the website.",
       },
       { status: 500 },
     );

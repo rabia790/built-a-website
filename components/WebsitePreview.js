@@ -123,6 +123,7 @@ export default function WebsitePreview({
   title,
   viewMode = "preview",
   onCopyCode,
+  previewVersion = 0,
 }) {
   const [activeTab, setActiveTab] = useState("app");
   const { appCode, cssCode } = useMemo(() => getGeneratedCode(files), [files]);
@@ -131,8 +132,9 @@ export default function WebsitePreview({
   const activeCode = activeTab === "app" ? appCode : cssCode;
   const iframeRef = useRef(null);
   const previewKey = useMemo(
-    () => `${title || "preview"}-${appCode.length}-${cssCode.length}`,
-    [appCode, cssCode, title],
+    () =>
+      `${title || "preview"}-${previewVersion}-${appCode.length}-${cssCode.length}`,
+    [appCode, cssCode, previewVersion, title],
   );
 
   function handlePreviewLoad() {
