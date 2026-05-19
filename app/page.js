@@ -88,6 +88,8 @@ export default function Home() {
   const [previewUrl, setPreviewUrl] = useState("");
   const [liveUrl, setLiveUrl] = useState("");
   const [currentProjectId, setCurrentProjectId] = useState("");
+  const [domainInput, setDomainInput] = useState("");
+  const [domainConnection, setDomainConnection] = useState(null);
   const [previewVersion, setPreviewVersion] = useState(0);
   const [forcedVariant, setForcedVariant] = useState("");
 
@@ -227,6 +229,7 @@ export default function Home() {
     setPreviewUrl("");
     setLiveUrl("");
     setCurrentProjectId("");
+    setDomainConnection(null);
     try {
       const designSeed = crypto.randomUUID();
       const requestedVariant =
@@ -304,6 +307,7 @@ export default function Home() {
     setLoadingAction("edit");
     setPreviewUrl("");
     setLiveUrl("");
+    setDomainConnection(null);
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 120000);
@@ -576,6 +580,7 @@ export default function Home() {
 
       setProject(unpublishedProject);
       setLiveUrl("");
+      setDomainConnection(null);
       upsertHistory(unpublishedProject, prompt.trim() || project.title || "Unpublished project");
       setNotice("Website unpublished.");
     } catch (err) {
@@ -602,6 +607,97 @@ export default function Home() {
     }
 
     window.open(effectiveLiveUrl, "_blank", "noopener,noreferrer");
+  }
+
+  async function handleConnectDomain() {
+    setError("");
+    setNotice("");
+
+    const publishProjectId = currentProjectId || project?.id || "";
+
+    if (!publishProjectId || !effectiveLiveUrl) {
+      setError("Publish this website before connecting a custom domain.");
+      return;
+    }
+
+    if (!domainInput.trim()) {
+      setError("Enter a domain to connect.");
+      return;
+    }
+
+    setLoadingAction("connectDomain");
+
+    try {
+      const data = await requestJson("/api/domains/connect", {
+        projectId: publishProjectId,
+        domain: domainInput.trim(),
+      });
+      setDomainConnection(data);
+      setDomainInput(data.domain || domainInput.trim());
+      setNotice(data.message || "Domain connected. Add the DNS record, then verify DNS.");
+    } catch (err) {
+      setError(err.message || "Could not connect this domain.");
+    } finally {
+      setLoadingAction("");
+    }
+  }
+
+  async function handleVerifyDomain() {
+    setError("");
+    setNotice("");
+
+    const domain = domainConnection?.domain || domainInput.trim();
+
+    if (!domain) {
+      setError("Connect a domain before verifying DNS.");
+      return;
+    }
+
+    setLoadingAction("verifyDomain");
+
+    try {
+      const data = await requestJson("/api/domains/verify", { domain });
+      setDomainConnection((current) => ({
+        ...(current || {}),
+        domain,
+        verified: data.verified,
+        verificationStatus: data.verificationStatus,
+      }));
+      setNotice(
+        data.verified
+          ? "Domain verified. Your published website can now use this domain."
+          : "DNS is not verified yet. DNS changes can take a few minutes to several hours.",
+      );
+    } catch (err) {
+      setError(err.message || "Could not verify this domain.");
+    } finally {
+      setLoadingAction("");
+    }
+  }
+
+  async function handleRemoveDomain() {
+    setError("");
+    setNotice("");
+
+    const domain = domainConnection?.domain || domainInput.trim();
+
+    if (!domain) {
+      setError("No custom domain is connected yet.");
+      return;
+    }
+
+    setLoadingAction("removeDomain");
+
+    try {
+      await requestJson("/api/domains/remove", { domain });
+      setDomainConnection(null);
+      setDomainInput("");
+      setNotice("Domain removed from this published website.");
+    } catch (err) {
+      setError(err.message || "Could not remove this domain.");
+    } finally {
+      setLoadingAction("");
+    }
   }
 
   async function handleFeedback(feedback, rating = 3) {
@@ -660,6 +756,8 @@ export default function Home() {
     setPreviewUrl("");
     setLiveUrl("");
     setCurrentProjectId("");
+    setDomainInput("");
+    setDomainConnection(null);
     setViewMode("preview");
     setPreviewVersion((value) => value + 1);
     setForcedVariant("");
@@ -1170,6 +1268,107 @@ export default function Home() {
                       Unpublish
                     </button>
                   </div>
+                </div>
+              )}
+
+              {effectiveLiveUrl && (
+                <div className="rounded-2xl border border-black/5 bg-white/85 p-4 shadow-sm backdrop-blur">
+                  <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="max-w-xl">
+                      <p className="text-sm font-semibold text-[#111827]">
+                        Connect Custom Domain
+                      </p>
+                      <p className="mt-1 text-xs leading-5 text-[#6b7280]">
+                        Already own a domain? Connect it to this published
+                        website. Custom domains connect to live sites only, not
+                        preview links.
+                      </p>
+                    </div>
+                    <div className="flex w-full flex-col gap-2 lg:max-w-xl">
+                      <div className="flex flex-col gap-2 sm:flex-row">
+                        <input
+                          value={domainInput}
+                          onChange={(event) => setDomainInput(event.target.value)}
+                          className="h-10 min-w-0 flex-1 rounded-full border border-black/5 bg-[#fbfaf8] px-4 text-sm text-[#111827] outline-none transition-shadow duration-150 placeholder:text-[#9ca3af] focus:bg-white focus:shadow-[0_0_0_4px_rgba(37,99,235,0.10)]"
+                          placeholder="example.com"
+                        />
+                        <button
+                          type="button"
+                          onClick={handleConnectDomain}
+                          disabled={isBusy}
+                          className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-full bg-[#111827] px-4 text-sm font-medium text-white transition-colors duration-150 hover:bg-black disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {loadingAction === "connectDomain" ? (
+                            <Loader2 className="size-4 animate-spin" />
+                          ) : (
+                            <LinkIcon className="size-4" />
+                          )}
+                          Connect Domain
+                        </button>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={handleVerifyDomain}
+                          disabled={isBusy || !domainInput.trim()}
+                          className="inline-flex h-9 items-center gap-2 rounded-full border border-black/5 bg-white px-4 text-xs font-medium text-[#111827] shadow-sm transition-shadow duration-150 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {loadingAction === "verifyDomain" ? (
+                            <Loader2 className="size-3.5 animate-spin" />
+                          ) : (
+                            <ExternalLink className="size-3.5" />
+                          )}
+                          Verify DNS
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleRemoveDomain}
+                          disabled={isBusy || !domainInput.trim()}
+                          className="inline-flex h-9 items-center gap-2 rounded-full border border-black/5 bg-white px-4 text-xs font-medium text-[#111827] shadow-sm transition-shadow duration-150 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          Remove Domain
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {domainConnection?.dnsInstructions && (
+                    <div className="mt-4 rounded-2xl border border-blue-100 bg-blue-50/70 p-4">
+                      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                        <div>
+                          <p className="text-sm font-semibold text-[#111827]">
+                            DNS instructions for {domainConnection.domain}
+                          </p>
+                          <p className="mt-1 text-xs text-[#6b7280]">
+                            DNS changes can take a few minutes to several hours.
+                          </p>
+                        </div>
+                        <span className="rounded-full bg-white px-3 py-1 text-xs font-medium text-[#2563eb] ring-1 ring-blue-100">
+                          {domainConnection.verificationStatus || "pending"}
+                        </span>
+                      </div>
+                      <div className="mt-3 grid gap-2 text-sm sm:grid-cols-3">
+                        <div className="rounded-xl bg-white p-3">
+                          <p className="text-xs text-[#6b7280]">Type</p>
+                          <p className="mt-1 font-semibold text-[#111827]">
+                            {domainConnection.dnsInstructions.type}
+                          </p>
+                        </div>
+                        <div className="rounded-xl bg-white p-3">
+                          <p className="text-xs text-[#6b7280]">Name</p>
+                          <p className="mt-1 font-semibold text-[#111827]">
+                            {domainConnection.dnsInstructions.name}
+                          </p>
+                        </div>
+                        <div className="rounded-xl bg-white p-3">
+                          <p className="text-xs text-[#6b7280]">Value</p>
+                          <p className="mt-1 break-all font-semibold text-[#111827]">
+                            {domainConnection.dnsInstructions.value}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 
