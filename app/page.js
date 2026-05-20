@@ -1,5 +1,6 @@
 "use client";
 
+/* eslint-disable @next/next/no-img-element */
 import { useEffect, useMemo, useState } from "react";
 import {
   Code2,
@@ -74,6 +75,48 @@ function formatTime(value) {
   }).format(new Date(value));
 }
 
+function getFileContent(files = [], acceptedPaths = []) {
+  return files.find((file) => acceptedPaths.includes(file.path))?.content || "";
+}
+
+function extractImageSources(files = []) {
+  const appCode = getFileContent(files, ["/App.js", "App.js", "/App.jsx"]);
+  const cssCode = getFileContent(files, ["/styles.css", "styles.css", "/src/styles.css"]);
+  const combined = `${appCode}\n${cssCode}`;
+  const sources = new Set();
+  const patterns = [
+    /<img\b[^>]*\bsrc\s*=\s*["']([^"']+)["']/gi,
+    /src\s*:\s*["']([^"']+)["']/gi,
+    /backgroundImage\s*:\s*["']url\(([^)]+)\)["']/gi,
+    /backgroundImage\s*:\s*\{\s*["'`]url\(([^)]+)\)["'`]\s*\}/gi,
+    /background-image\s*:\s*url\((['"]?)([^'")]+)\1\)/gi,
+    /url\((['"]?)([^'")]+)\1\)/gi,
+    /(https?:\/\/images\.unsplash\.com\/[^"'`\s)]+)/gi,
+  ];
+
+  for (const pattern of patterns) {
+    let match = pattern.exec(combined);
+    while (match) {
+      const value = (match[2] || match[1] || "").trim().replace(/^['"`]|['"`]$/g, "");
+      const isLikelyImage =
+        /^https?:\/\/images\.unsplash\.com\//i.test(value) ||
+        /\.(jpg|jpeg|png|webp|avif|svg)(\?|$)/i.test(value) ||
+        value.startsWith("/");
+
+      if (value && isLikelyImage) {
+        sources.add(value);
+      }
+      match = pattern.exec(combined);
+    }
+  }
+
+  return [...sources].map((src) => ({
+    src,
+    isRemote: /^https?:\/\//i.test(src),
+    isLocal: src.startsWith("/"),
+  }));
+}
+
 export default function Home() {
   const [mounted, setMounted] = useState(false);
   const [prompt, setPrompt] = useState("");
@@ -92,10 +135,25 @@ export default function Home() {
   const [domainConnection, setDomainConnection] = useState(null);
   const [previewVersion, setPreviewVersion] = useState(0);
   const [forcedVariant, setForcedVariant] = useState("");
+  const [sidePanelTab, setSidePanelTab] = useState("links");
 
   const hasFiles = useMemo(() => {
     return Array.isArray(project?.files) && project.files.length > 0;
   }, [project]);
+
+  const imageSources = useMemo(
+    () => extractImageSources(project?.files || []),
+    [project?.files],
+  );
+  const currentCodeSize = useMemo(
+    () =>
+      (project?.files || []).reduce(
+        (total, file) => total + String(file.content || "").length,
+        0,
+      ),
+    [project?.files],
+  );
+  const showLargeEditWarning = hasFiles && currentCodeSize > 45000;
 
   const effectivePreviewUrl =
     previewUrl ||
@@ -107,6 +165,17 @@ export default function Home() {
     (mounted && project?.slug && project?.status === "published"
       ? `${window.location.origin}/site/${project.slug}`
       : "");
+  const projectStatus = domainConnection?.verified
+    ? "Custom domain verified"
+    : domainConnection?.domain
+      ? "Custom domain pending"
+      : effectiveLiveUrl
+        ? "Published"
+        : currentProjectId || effectivePreviewUrl
+          ? "Saved"
+          : hasFiles
+            ? "Draft"
+            : "Draft";
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -1074,585 +1143,385 @@ export default function Home() {
                 )}
               </section>
 
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <div className="flex flex-wrap items-center gap-3">
-                    <h2 className="text-lg font-semibold text-[#111827]">
-                      {project?.title || "Untitled project"}
-                    </h2>
-                    <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-[#2563eb]">
-                      Live preview
-                    </span>
-                    {effectivePreviewUrl && (
-                      <button
-                        type="button"
-                        onClick={handleOpenPreview}
-                        className="inline-flex h-7 items-center gap-1.5 rounded-full border border-black/5 bg-white px-3 text-xs font-medium text-[#111827] shadow-sm transition-shadow duration-150 hover:shadow-md"
-                      >
-                        <ExternalLink className="size-3.5" />
-                        Open Preview
-                      </button>
-                    )}
-                    {effectiveLiveUrl && (
-                      <button
-                        type="button"
-                        onClick={handleOpenLiveWebsite}
-                        className="inline-flex h-7 items-center gap-1.5 rounded-full bg-[#111827] px-3 text-xs font-medium text-white shadow-sm transition-colors duration-150 hover:bg-black"
-                      >
-                        <ExternalLink className="size-3.5" />
-                        View Published Site
-                      </button>
-                    )}
-                    {showDesignDebug && project?.category && (
-                      <span className="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-[#6b7280] ring-1 ring-black/5">
-                        {project.category.replaceAll("_", " ")}
-                      </span>
-                    )}
-                    {showDesignDebug && project?.templateVariant && (
-                      <span className="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-[#6b7280] ring-1 ring-black/5">
-                        {project.templateVariant.replaceAll("_", " ")}
-                      </span>
-                    )}
-                  </div>
-                  <p className="mt-1 text-sm text-[#6b7280]">
-                    Generated React landing page.
-                  </p>
-                </div>
-                <div className="flex flex-wrap items-center justify-end gap-2">
-                  {hasFiles && (
-                    effectiveLiveUrl ? (
-                      <button
-                        type="button"
-                        onClick={handleOpenLiveWebsite}
-                        className="inline-flex h-10 items-center gap-2 rounded-full bg-[#111827] px-4 text-sm font-medium text-white shadow-sm transition-colors duration-150 hover:bg-black"
-                      >
-                        <ExternalLink className="size-4" />
-                        View Published Site
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={currentProjectId ? handlePublish : handleSave}
-                        disabled={isBusy}
-                        className="inline-flex h-10 items-center gap-2 rounded-full bg-[#111827] px-4 text-sm font-medium text-white shadow-sm transition-colors duration-150 hover:bg-black disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        {loadingAction === "publish" || loadingAction === "save" ? (
-                          <Loader2 className="size-4 animate-spin" />
-                        ) : (
-                          <ExternalLink className="size-4" />
+              <div className="grid min-h-0 gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
+                <div className="min-w-0 space-y-3 pb-24 xl:pb-0">
+                  <div className="flex flex-col gap-3 rounded-[1.1rem] border border-black/5 bg-white/72 px-4 py-3 shadow-sm backdrop-blur md:flex-row md:items-center md:justify-between">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h2 className="truncate text-lg font-semibold text-[#111827]">
+                          {project?.title || "Untitled project"}
+                        </h2>
+                        <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-[#2563eb]">
+                          {projectStatus}
+                        </span>
+                        {showDesignDebug && project?.category && (
+                          <span className="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-[#6b7280] ring-1 ring-black/5">
+                            {project.category.replaceAll("_", " ")}
+                          </span>
                         )}
-                        {currentProjectId ? "Publish Website" : "Save Project First"}
-                      </button>
-                    )
-                  )}
-                  <div className="inline-flex rounded-full border border-black/5 bg-white/85 p-1 shadow-sm backdrop-blur">
-                    <button
-                      type="button"
-                      onClick={() => setViewMode("preview")}
-                      className={`inline-flex h-9 items-center gap-2 rounded-lg px-3 text-sm font-medium transition-colors duration-150 ${
-                        viewMode === "preview"
-                          ? "bg-[#111827] text-white"
-                          : "text-[#6b7280] hover:bg-[#f7f4ef] hover:text-[#111827]"
-                      }`}
-                    >
-                      <Eye className="size-4" />
-                      Preview
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setViewMode("code")}
-                      className={`inline-flex h-9 items-center gap-2 rounded-lg px-3 text-sm font-medium transition-colors duration-150 ${
-                        viewMode === "code"
-                          ? "bg-[#111827] text-white"
-                          : "text-[#6b7280] hover:bg-[#f7f4ef] hover:text-[#111827]"
-                      }`}
-                    >
-                      <Code2 className="size-4" />
-                      Code
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              {effectivePreviewUrl && (
-                <div className="flex flex-col gap-3 rounded-2xl border border-blue-100 bg-blue-50/70 p-3 shadow-sm sm:flex-row sm:items-center">
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-semibold text-[#111827]">
-                      Preview link
-                    </p>
-                    <p className="mt-1 truncate text-xs text-[#2563eb]">
-                      {effectivePreviewUrl}
-                    </p>
-                  </div>
-                  <div className="flex shrink-0 flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={handleOpenPreview}
-                      className="inline-flex h-9 items-center gap-2 rounded-full bg-[#111827] px-4 text-xs font-medium text-white transition-colors duration-150 hover:bg-black"
-                    >
-                      <ExternalLink className="size-3.5" />
-                      Open Preview
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleCopyPreviewLink}
-                      className="inline-flex h-9 items-center gap-2 rounded-full border border-black/5 bg-white px-4 text-xs font-medium text-[#111827] shadow-sm transition-shadow duration-150 hover:shadow-md"
-                    >
-                      <LinkIcon className="size-3.5" />
-                      Copy Link
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {hasFiles && effectivePreviewUrl && !effectiveLiveUrl && (
-                <div className="flex flex-col gap-3 rounded-2xl border border-black/5 bg-white/80 p-3 shadow-sm sm:flex-row sm:items-center">
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-semibold text-[#111827]">
-                      Save first, then publish to create a live website URL.
-                    </p>
-                    <p className="mt-1 text-xs leading-5 text-[#6b7280]">
-                      Preview links are for testing. Published sites live at
-                      /site/website-slug.
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handlePublish}
-                    disabled={isBusy || !currentProjectId}
-                    className="inline-flex h-9 shrink-0 items-center gap-2 rounded-full bg-[#111827] px-4 text-xs font-medium text-white transition-colors duration-150 hover:bg-black disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {loadingAction === "publish" ? (
-                      <Loader2 className="size-3.5 animate-spin" />
-                    ) : (
-                      <ExternalLink className="size-3.5" />
-                    )}
-                    Publish Website
-                  </button>
-                </div>
-              )}
-
-              {effectiveLiveUrl && (
-                <div className="flex flex-col gap-3 rounded-2xl border border-emerald-100 bg-emerald-50/80 p-3 shadow-sm sm:flex-row sm:items-center">
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-semibold text-[#111827]">
-                      Your website is live
-                    </p>
-                    <p className="mt-1 truncate text-xs text-emerald-700">
-                      {effectiveLiveUrl}
-                    </p>
-                  </div>
-                  <div className="flex shrink-0 flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={handleOpenLiveWebsite}
-                      className="inline-flex h-9 items-center gap-2 rounded-full bg-[#111827] px-4 text-xs font-medium text-white transition-colors duration-150 hover:bg-black"
-                    >
-                      <ExternalLink className="size-3.5" />
-                      View Published Site
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleCopyLiveLink}
-                      className="inline-flex h-9 items-center gap-2 rounded-full border border-black/5 bg-white px-4 text-xs font-medium text-[#111827] shadow-sm transition-shadow duration-150 hover:shadow-md"
-                    >
-                      <LinkIcon className="size-3.5" />
-                      Copy Live Link
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleUnpublish}
-                      disabled={isBusy}
-                      className="inline-flex h-9 items-center gap-2 rounded-full border border-black/5 bg-white px-4 text-xs font-medium text-[#111827] shadow-sm transition-shadow duration-150 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      Unpublish
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {effectiveLiveUrl && (
-                <div className="rounded-2xl border border-black/5 bg-white/85 p-4 shadow-sm backdrop-blur">
-                  <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                    <div className="max-w-xl">
-                      <p className="text-sm font-semibold text-[#111827]">
-                        Connect Custom Domain
-                      </p>
-                      <p className="mt-1 text-xs leading-5 text-[#6b7280]">
-                        Already own a domain? Connect it to this published
-                        website. Custom domains connect to live sites only, not
-                        preview links.
+                        {showDesignDebug && project?.templateVariant && (
+                          <span className="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-[#6b7280] ring-1 ring-black/5">
+                            {project.templateVariant.replaceAll("_", " ")}
+                          </span>
+                        )}
+                      </div>
+                      <p className="mt-1 text-sm text-[#6b7280]">
+                        Preview-first React website workspace.
                       </p>
                     </div>
-                    <div className="flex w-full flex-col gap-2 lg:max-w-xl">
-                      <div className="flex flex-col gap-2 sm:flex-row">
-                        <input
-                          value={domainInput}
-                          onChange={(event) => setDomainInput(event.target.value)}
-                          className="h-10 min-w-0 flex-1 rounded-full border border-black/5 bg-[#fbfaf8] px-4 text-sm text-[#111827] outline-none transition-shadow duration-150 placeholder:text-[#9ca3af] focus:bg-white focus:shadow-[0_0_0_4px_rgba(37,99,235,0.10)]"
-                          placeholder="example.com"
-                        />
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      {hasFiles && (
                         <button
                           type="button"
-                          onClick={handleConnectDomain}
+                          onClick={handleSave}
                           disabled={isBusy}
-                          className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-full bg-[#111827] px-4 text-sm font-medium text-white transition-colors duration-150 hover:bg-black disabled:cursor-not-allowed disabled:opacity-50"
+                          className="inline-flex h-9 items-center gap-2 rounded-full border border-black/5 bg-white px-3.5 text-xs font-medium text-[#111827] shadow-sm transition-shadow duration-150 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50"
                         >
-                          {loadingAction === "connectDomain" ? (
-                            <Loader2 className="size-4 animate-spin" />
-                          ) : (
-                            <LinkIcon className="size-4" />
-                          )}
-                          Connect Domain
+                          <Save className="size-3.5" />
+                          Save
                         </button>
-                      </div>
-                      <div className="flex flex-wrap gap-2">
+                      )}
+                      {hasFiles && (
                         <button
                           type="button"
-                          onClick={handleVerifyDomain}
-                          disabled={isBusy || !domainInput.trim()}
-                          className="inline-flex h-9 items-center gap-2 rounded-full border border-black/5 bg-white px-4 text-xs font-medium text-[#111827] shadow-sm transition-shadow duration-150 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50"
+                          onClick={handleOpenPreview}
+                          disabled={!effectivePreviewUrl}
+                          className="inline-flex h-9 items-center gap-2 rounded-full border border-black/5 bg-white px-3.5 text-xs font-medium text-[#111827] shadow-sm transition-shadow duration-150 hover:shadow-md disabled:cursor-not-allowed disabled:text-[#9ca3af] disabled:opacity-60"
                         >
-                          {loadingAction === "verifyDomain" ? (
+                          <ExternalLink className="size-3.5" />
+                          Preview
+                        </button>
+                      )}
+                      {hasFiles && (
+                        <button
+                          type="button"
+                          onClick={effectiveLiveUrl ? handleOpenLiveWebsite : handlePublish}
+                          disabled={isBusy || (!effectiveLiveUrl && !currentProjectId)}
+                          className="inline-flex h-9 items-center gap-2 rounded-full bg-[#111827] px-3.5 text-xs font-medium text-white shadow-sm transition-colors duration-150 hover:bg-black disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {loadingAction === "publish" ? (
                             <Loader2 className="size-3.5 animate-spin" />
                           ) : (
                             <ExternalLink className="size-3.5" />
                           )}
-                          Verify DNS
+                          {effectiveLiveUrl ? "View Live" : "Publish"}
+                        </button>
+                      )}
+                      {hasFiles && (
+                        <button
+                          type="button"
+                          onClick={handleCopyCode}
+                          className="inline-flex h-9 items-center gap-2 rounded-full border border-black/5 bg-white px-3.5 text-xs font-medium text-[#111827] shadow-sm transition-shadow duration-150 hover:shadow-md"
+                        >
+                          <Copy className="size-3.5" />
+                          More
+                        </button>
+                      )}
+                      <div className="inline-flex rounded-full border border-black/5 bg-white/85 p-1 shadow-sm backdrop-blur">
+                        <button
+                          type="button"
+                          onClick={() => setViewMode("preview")}
+                          className={`inline-flex h-8 items-center gap-1.5 rounded-lg px-3 text-xs font-medium transition-colors duration-150 ${
+                            viewMode === "preview"
+                              ? "bg-[#111827] text-white"
+                              : "text-[#6b7280] hover:bg-[#f7f4ef] hover:text-[#111827]"
+                          }`}
+                        >
+                          <Eye className="size-3.5" />
+                          Preview
                         </button>
                         <button
                           type="button"
-                          onClick={handleRemoveDomain}
-                          disabled={isBusy || !domainInput.trim()}
-                          className="inline-flex h-9 items-center gap-2 rounded-full border border-black/5 bg-white px-4 text-xs font-medium text-[#111827] shadow-sm transition-shadow duration-150 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50"
+                          onClick={() => setViewMode("code")}
+                          className={`inline-flex h-8 items-center gap-1.5 rounded-lg px-3 text-xs font-medium transition-colors duration-150 ${
+                            viewMode === "code"
+                              ? "bg-[#111827] text-white"
+                              : "text-[#6b7280] hover:bg-[#f7f4ef] hover:text-[#111827]"
+                          }`}
                         >
-                          Remove Domain
+                          <Code2 className="size-3.5" />
+                          Code
                         </button>
                       </div>
                     </div>
                   </div>
 
-                  {domainConnection?.dnsInstructions && (
-                    <div className="mt-4 rounded-2xl border border-blue-100 bg-blue-50/70 p-4">
-                      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                        <div>
-                          <p className="text-sm font-semibold text-[#111827]">
-                            DNS instructions for {domainConnection.domain}
-                          </p>
-                          <p className="mt-1 text-xs text-[#6b7280]">
-                            DNS changes can take a few minutes to several hours.
-                          </p>
+                  {loadingAction === "generate" || loadingAction === "load" ? (
+                    <div className="flex h-[calc(100vh-220px)] min-h-[520px] items-center justify-center rounded-[1.4rem] border border-black/5 bg-white/86 p-6 shadow-[0_20px_58px_rgba(42,31,18,0.09)] ring-1 ring-white/70 backdrop-blur">
+                      <div className="max-w-sm text-center">
+                        <div className="mx-auto mb-5 flex size-12 items-center justify-center rounded-2xl bg-[#111827] text-white shadow-lg shadow-slate-300/70">
+                          <Loader2 className="size-5 animate-spin" />
                         </div>
-                        <span className="rounded-full bg-white px-3 py-1 text-xs font-medium text-[#2563eb] ring-1 ring-blue-100">
-                          {domainConnection.verificationStatus || "pending"}
-                        </span>
+                        <h3 className="text-xl font-semibold text-[#111827]">
+                          {loadingAction === "load"
+                            ? "Loading saved project..."
+                            : "Designing your website..."}
+                        </h3>
+                        <p className="mt-2 text-sm leading-6 text-[#6b7280]">
+                          Creating layout, copy, and responsive React code.
+                        </p>
                       </div>
-                      <div className="mt-3 grid gap-2 text-sm sm:grid-cols-3">
-                        <div className="rounded-xl bg-white p-3">
-                          <p className="text-xs text-[#6b7280]">Type</p>
-                          <p className="mt-1 font-semibold text-[#111827]">
-                            {domainConnection.dnsInstructions.type}
-                          </p>
-                        </div>
-                        <div className="rounded-xl bg-white p-3">
-                          <p className="text-xs text-[#6b7280]">Name</p>
-                          <p className="mt-1 font-semibold text-[#111827]">
-                            {domainConnection.dnsInstructions.name}
-                          </p>
-                        </div>
-                        <div className="rounded-xl bg-white p-3">
-                          <p className="text-xs text-[#6b7280]">Value</p>
-                          <p className="mt-1 break-all font-semibold text-[#111827]">
-                            {domainConnection.dnsInstructions.value}
-                          </p>
-                        </div>
+                    </div>
+                  ) : hasFiles ? (
+                    <WebsitePreview
+                      files={project.files}
+                      title={project.title}
+                      viewMode={viewMode}
+                      onCopyCode={handleCopyCode}
+                      previewVersion={previewVersion}
+                    />
+                  ) : (
+                    <EmptyState
+                      examples={promptExamples}
+                      onSelect={(example) => setPrompt(examplePrompts[example] || example)}
+                    />
+                  )}
+
+                  {hasFiles && (
+                    <div className="rounded-[1.15rem] border border-black/5 bg-white/92 p-3 shadow-[0_14px_38px_rgba(42,31,18,0.08)] backdrop-blur">
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                        <input
+                          value={instruction}
+                          onChange={(event) => setInstruction(event.target.value)}
+                          className="h-10 flex-1 rounded-full border border-black/5 bg-[#fbfaf8] px-5 text-sm text-[#111827] outline-none transition-shadow duration-150 placeholder:text-[#9ca3af] focus:bg-white focus:shadow-[0_0_0_4px_rgba(37,99,235,0.10)]"
+                          placeholder="Ask AI to refine this website..."
+                        />
+                        <button
+                          type="button"
+                          onClick={handleEdit}
+                          disabled={isBusy}
+                          className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-full bg-[#111827] px-5 text-sm font-medium text-white transition-colors duration-150 hover:bg-black disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {loadingAction === "edit" ? (
+                            <Loader2 className="size-4 animate-spin" />
+                          ) : (
+                            <Wand2 className="size-4" />
+                          )}
+                          Apply Edit
+                        </button>
                       </div>
+                      {showLargeEditWarning && (
+                        <p className="mt-2 text-xs leading-5 text-[#6b7280]">
+                          Large edits may use more AI credits. Small edits like
+                          color, logo, button text, background, and text changes
+                          are handled instantly.
+                        </p>
+                      )}
                     </div>
                   )}
                 </div>
-              )}
 
-              {hasFiles && !effectivePreviewUrl && (
-                <div className="flex flex-col gap-3 rounded-2xl border border-amber-100 bg-amber-50/70 p-3 shadow-sm sm:flex-row sm:items-center">
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-semibold text-[#111827]">
-                      Save your project to generate a shareable preview link.
-                    </p>
-                    <p className="mt-1 text-xs leading-5 text-[#6b7280]">
-                      Preview links are created only after your website files
-                      are saved.
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handleSave}
-                    disabled={isBusy}
-                    className="inline-flex h-9 shrink-0 items-center gap-2 rounded-full bg-[#111827] px-4 text-xs font-medium text-white transition-colors duration-150 hover:bg-black disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    <Save className="size-3.5" />
-                    Save Project
-                  </button>
-                </div>
-              )}
-
-              {hasFiles && (
-                <div className="rounded-2xl border border-black/5 bg-white/80 p-3 shadow-sm backdrop-blur">
-                  <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                    <div>
-                      <p className="text-sm font-semibold text-[#111827]">
-                        How is this result?
-                      </p>
-                      <p className="mt-1 text-xs text-[#6b7280]">
-                        Your feedback improves future generations and template
-                        examples.
-                      </p>
+                {hasFiles && (
+                  <aside className="min-h-0 rounded-[1.25rem] border border-black/5 bg-white/86 p-4 shadow-[0_18px_48px_rgba(42,31,18,0.08)] ring-1 ring-white/70 backdrop-blur xl:sticky xl:top-4 xl:max-h-[calc(100vh-32px)] xl:overflow-auto">
+                    <div className="mb-3 flex items-center justify-between">
+                      <div>
+                        <p className="text-sm font-semibold text-[#111827]">Project controls</p>
+                        <p className="text-xs text-[#6b7280]">Links, publish, domains, feedback, assets.</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleReset}
+                        className="inline-flex size-8 items-center justify-center rounded-full border border-black/5 bg-white text-[#6b7280] shadow-sm transition-shadow duration-150 hover:text-[#111827] hover:shadow-md"
+                        title="Reset project"
+                      >
+                        <RotateCcw className="size-3.5" />
+                      </button>
                     </div>
-                    <div className="flex flex-wrap gap-2">
-                      {[
-                        ["Looks good", 5],
-                        ["Too basic", 2],
-                        ["Wrong images", 2],
-                        ["Bad colors", 2],
-                        ["Not premium", 2],
-                        ["Edit did not work", 1],
-                      ].map(([label, rating]) => (
+
+                    <div className="mb-4 grid grid-cols-3 gap-1 rounded-2xl bg-[#f7f4ef] p-1 text-xs">
+                      {["links", "publish", "domain", "feedback", "assets"].map((tab) => (
                         <button
-                          key={label}
+                          key={tab}
                           type="button"
-                          onClick={() => handleFeedback(label, rating)}
-                          className="rounded-full border border-black/5 bg-white px-3 py-1.5 text-xs font-medium text-[#6b7280] shadow-sm transition-shadow duration-150 hover:text-[#111827] hover:shadow-md"
+                          onClick={() => setSidePanelTab(tab)}
+                          className={`rounded-xl px-2 py-2 font-medium capitalize transition-colors duration-150 ${
+                            sidePanelTab === tab
+                              ? "bg-white text-[#111827] shadow-sm"
+                              : "text-[#6b7280] hover:text-[#111827]"
+                          }`}
                         >
-                          {label}
+                          {tab}
                         </button>
                       ))}
-                      <button
-                        type="button"
-                        onClick={handleSaveAsTemplateExample}
-                        className="rounded-full bg-[#111827] px-3 py-1.5 text-xs font-medium text-white transition-colors duration-150 hover:bg-black"
-                      >
-                        Save as template example
-                      </button>
                     </div>
-                  </div>
-                </div>
-              )}
 
-              {loadingAction === "generate" || loadingAction === "load" ? (
-                <div className="flex h-[calc(100vh-285px)] min-h-[520px] items-center justify-center rounded-[1.5rem] border border-black/5 bg-white/86 p-6 shadow-[0_24px_70px_rgba(42,31,18,0.09)] ring-1 ring-white/70 backdrop-blur">
-                  <div className="max-w-sm text-center">
-                    <div className="mx-auto mb-5 flex size-12 items-center justify-center rounded-2xl bg-[#111827] text-white shadow-lg shadow-slate-300/70">
-                      <Loader2 className="size-5 animate-spin" />
-                    </div>
-                    <h3 className="text-xl font-semibold text-[#111827]">
-                      {loadingAction === "load"
-                        ? "Loading saved project..."
-                        : "Designing your website..."}
-                    </h3>
-                    <p className="mt-2 text-sm leading-6 text-[#6b7280]">
-                      Creating brand direction, copy, layout, and React code.
-                    </p>
-                  </div>
-                </div>
-              ) : hasFiles ? (
-                <WebsitePreview
-                  files={project.files}
-                  title={project.title}
-                  viewMode={viewMode}
-                  onCopyCode={handleCopyCode}
-                  previewVersion={previewVersion}
-                />
-              ) : (
-                <EmptyState
-                  examples={promptExamples}
-                  onSelect={(example) => setPrompt(examplePrompts[example] || example)}
-                />
-              )}
-            </div>
-          </div>
+                    {sidePanelTab === "links" && (
+                      <div className="space-y-3">
+                        <div className="rounded-2xl border border-black/5 bg-[#fbfaf8] p-3">
+                          <p className="text-sm font-semibold text-[#111827]">Preview link</p>
+                          {effectivePreviewUrl ? (
+                            <>
+                              <code className="mt-2 block truncate rounded-full bg-white px-3 py-2 text-xs text-[#6b7280] ring-1 ring-black/5">
+                                {effectivePreviewUrl}
+                              </code>
+                              <div className="mt-3 flex gap-2">
+                                <button type="button" onClick={handleOpenPreview} className="inline-flex h-9 flex-1 items-center justify-center gap-2 rounded-full bg-[#111827] px-3 text-xs font-medium text-white transition-colors duration-150 hover:bg-black">
+                                  <ExternalLink className="size-3.5" />
+                                  Open Preview
+                                </button>
+                                <button type="button" onClick={handleCopyPreviewLink} className="inline-flex h-9 flex-1 items-center justify-center gap-2 rounded-full border border-black/5 bg-white px-3 text-xs font-medium text-[#111827] transition-shadow duration-150 hover:shadow-md">
+                                  <LinkIcon className="size-3.5" />
+                                  Copy
+                                </button>
+                              </div>
+                            </>
+                          ) : (
+                            <div className="mt-2 rounded-xl bg-amber-50 p-3 text-xs leading-5 text-amber-800">
+                              Save first to get a public preview URL.
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
 
-          {hasFiles && (
-            <div className="bg-transparent px-4 pb-4 sm:px-6 lg:px-8">
-              <div className="mx-auto max-w-[1540px] rounded-[1.35rem] border border-black/5 bg-white/90 p-3 shadow-[0_18px_55px_rgba(42,31,18,0.11)] backdrop-blur">
-                {effectivePreviewUrl && (
-                  <div className="mb-3 flex flex-col gap-2 border-b border-black/5 pb-3 text-sm text-[#6b7280] lg:flex-row lg:items-center">
-                    <span className="font-medium text-[#111827]">
-                      Preview link
-                    </span>
-                    <code className="min-w-0 flex-1 truncate rounded-full bg-[#fbfaf8] px-3 py-1 text-xs text-[#6b7280]">
-                      {effectivePreviewUrl}
-                    </code>
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        onClick={handleOpenPreview}
-                        className="inline-flex h-8 items-center gap-2 rounded-full bg-[#111827] px-3 text-xs font-medium text-white transition-colors duration-150 hover:bg-black"
-                      >
-                        <ExternalLink className="size-3.5" />
-                        Open Preview
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleCopyPreviewLink}
-                        className="inline-flex h-8 items-center gap-2 rounded-full border border-black/5 bg-white px-3 text-xs font-medium text-[#111827] transition-shadow duration-150 hover:shadow-md"
-                      >
-                        <LinkIcon className="size-3.5" />
-                        Copy Link
-                      </button>
-                    </div>
-                  </div>
+                    {sidePanelTab === "publish" && (
+                      <div className="space-y-3">
+                        <div className="rounded-2xl border border-black/5 bg-[#fbfaf8] p-3">
+                          <p className="text-sm font-semibold text-[#111827]">Live website</p>
+                          {effectiveLiveUrl ? (
+                            <>
+                              <code className="mt-2 block truncate rounded-full bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
+                                {effectiveLiveUrl}
+                              </code>
+                              <div className="mt-3 grid gap-2">
+                                <button type="button" onClick={handleOpenLiveWebsite} className="inline-flex h-9 items-center justify-center gap-2 rounded-full bg-[#111827] px-3 text-xs font-medium text-white transition-colors duration-150 hover:bg-black">
+                                  <ExternalLink className="size-3.5" />
+                                  View Published Site
+                                </button>
+                                <button type="button" onClick={handleCopyLiveLink} className="inline-flex h-9 items-center justify-center gap-2 rounded-full border border-black/5 bg-white px-3 text-xs font-medium text-[#111827] transition-shadow duration-150 hover:shadow-md">
+                                  <LinkIcon className="size-3.5" />
+                                  Copy Live Link
+                                </button>
+                                <button type="button" onClick={handleUnpublish} disabled={isBusy} className="inline-flex h-9 items-center justify-center rounded-full border border-black/5 bg-white px-3 text-xs font-medium text-[#111827] transition-shadow duration-150 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50">
+                                  Unpublish
+                                </button>
+                              </div>
+                            </>
+                          ) : (
+                            <>
+                              <p className="mt-2 text-xs leading-5 text-[#6b7280]">
+                                Save first, then publish to create a real website URL.
+                              </p>
+                              <button type="button" onClick={currentProjectId ? handlePublish : handleSave} disabled={isBusy} className="mt-3 inline-flex h-9 w-full items-center justify-center gap-2 rounded-full bg-[#111827] px-3 text-xs font-medium text-white transition-colors duration-150 hover:bg-black disabled:cursor-not-allowed disabled:opacity-50">
+                                {loadingAction === "publish" || loadingAction === "save" ? <Loader2 className="size-3.5 animate-spin" /> : <ExternalLink className="size-3.5" />}
+                                {currentProjectId ? "Publish Website" : "Save Project"}
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {sidePanelTab === "domain" && (
+                      <div className="space-y-3">
+                        <div className="rounded-2xl border border-black/5 bg-[#fbfaf8] p-3">
+                          <p className="text-sm font-semibold text-[#111827]">Connect custom domain</p>
+                          <p className="mt-1 text-xs leading-5 text-[#6b7280]">
+                            Custom domains connect to published websites only.
+                          </p>
+                          <input value={domainInput} onChange={(event) => setDomainInput(event.target.value)} className="mt-3 h-10 w-full rounded-full border border-black/5 bg-white px-4 text-sm text-[#111827] outline-none transition-shadow duration-150 placeholder:text-[#9ca3af] focus:shadow-[0_0_0_4px_rgba(37,99,235,0.10)]" placeholder="example.com" />
+                          <div className="mt-2 grid gap-2">
+                            <button type="button" onClick={handleConnectDomain} disabled={isBusy || !effectiveLiveUrl} className="inline-flex h-9 items-center justify-center gap-2 rounded-full bg-[#111827] px-3 text-xs font-medium text-white transition-colors duration-150 hover:bg-black disabled:cursor-not-allowed disabled:opacity-50">
+                              {loadingAction === "connectDomain" ? <Loader2 className="size-3.5 animate-spin" /> : <LinkIcon className="size-3.5" />}
+                              Connect Domain
+                            </button>
+                            <div className="grid grid-cols-2 gap-2">
+                              <button type="button" onClick={handleVerifyDomain} disabled={isBusy || !domainInput.trim()} className="inline-flex h-9 items-center justify-center gap-2 rounded-full border border-black/5 bg-white px-3 text-xs font-medium text-[#111827] transition-shadow duration-150 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50">
+                                Verify DNS
+                              </button>
+                              <button type="button" onClick={handleRemoveDomain} disabled={isBusy || !domainInput.trim()} className="inline-flex h-9 items-center justify-center rounded-full border border-black/5 bg-white px-3 text-xs font-medium text-[#111827] transition-shadow duration-150 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50">
+                                Remove
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                        {domainConnection?.dnsInstructions && (
+                          <div className="rounded-2xl border border-blue-100 bg-blue-50/70 p-3">
+                            <div className="flex items-center justify-between gap-2">
+                              <p className="text-sm font-semibold text-[#111827]">DNS instructions</p>
+                              <span className="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-[#2563eb] ring-1 ring-blue-100">
+                                {domainConnection.verificationStatus || "pending"}
+                              </span>
+                            </div>
+                            {["type", "name", "value"].map((key) => (
+                              <div key={key} className="mt-2 rounded-xl bg-white p-3 text-xs">
+                                <p className="capitalize text-[#6b7280]">{key}</p>
+                                <p className="mt-1 break-all font-semibold text-[#111827]">
+                                  {domainConnection.dnsInstructions[key]}
+                                </p>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {sidePanelTab === "feedback" && (
+                      <div className="space-y-3">
+                        <div className="rounded-2xl border border-black/5 bg-[#fbfaf8] p-3">
+                          <p className="text-sm font-semibold text-[#111827]">How is this result?</p>
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            {[
+                              ["Looks good", 5],
+                              ["Too basic", 2],
+                              ["Wrong images", 2],
+                              ["Bad colors", 2],
+                              ["Not premium", 2],
+                              ["Edit did not work", 1],
+                            ].map(([label, rating]) => (
+                              <button key={label} type="button" onClick={() => handleFeedback(label, rating)} className="rounded-full border border-black/5 bg-white px-3 py-1.5 text-xs font-medium text-[#6b7280] shadow-sm transition-shadow duration-150 hover:text-[#111827] hover:shadow-md">
+                                {label}
+                              </button>
+                            ))}
+                          </div>
+                          <button type="button" onClick={handleSaveAsTemplateExample} className="mt-3 inline-flex h-9 w-full items-center justify-center rounded-full bg-[#111827] px-3 text-xs font-medium text-white transition-colors duration-150 hover:bg-black">
+                            Save as template example
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {sidePanelTab === "assets" && (
+                      <div className="space-y-3">
+                        <div className="rounded-2xl border border-black/5 bg-[#fbfaf8] p-3">
+                          <div className="flex items-center justify-between">
+                            <p className="text-sm font-semibold text-[#111827]">Images used</p>
+                            <span className="text-xs text-[#6b7280]">{imageSources.length} found</span>
+                          </div>
+                          {imageSources.length ? (
+                            <div className="mt-3 space-y-2">
+                              {imageSources.map((image) => (
+                                <div key={image.src} className="flex gap-3 rounded-xl bg-white p-2 ring-1 ring-black/5">
+                                  {image.isRemote ? (
+                                    <img src={image.src} alt="" className="size-14 shrink-0 rounded-lg object-cover" />
+                                  ) : (
+                                    <div className="flex size-14 shrink-0 items-center justify-center rounded-lg bg-red-50 text-[11px] text-red-700">
+                                      Missing
+                                    </div>
+                                  )}
+                                  <div className="min-w-0">
+                                    <p className={`text-xs font-semibold ${image.isRemote ? "text-emerald-700" : "text-red-700"}`}>
+                                      {image.isRemote ? "Remote image" : "Missing local image"}
+                                    </p>
+                                    <p className="mt-1 truncate text-xs text-[#6b7280]">{image.src}</p>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="mt-3 text-sm leading-6 text-[#6b7280]">
+                              No image URLs found in App.js or styles.css.
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </aside>
                 )}
-
-                {effectiveLiveUrl && (
-                  <div className="mb-3 flex flex-col gap-2 border-b border-black/5 pb-3 text-sm text-[#6b7280] lg:flex-row lg:items-center">
-                    <span className="font-medium text-[#111827]">
-                      Live website
-                    </span>
-                    <code className="min-w-0 flex-1 truncate rounded-full bg-emerald-50 px-3 py-1 text-xs text-emerald-700">
-                      {effectiveLiveUrl}
-                    </code>
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        onClick={handleOpenLiveWebsite}
-                        className="inline-flex h-8 items-center gap-2 rounded-full bg-[#111827] px-3 text-xs font-medium text-white transition-colors duration-150 hover:bg-black"
-                      >
-                        <ExternalLink className="size-3.5" />
-                        View Published Site
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleCopyLiveLink}
-                        className="inline-flex h-8 items-center gap-2 rounded-full border border-black/5 bg-white px-3 text-xs font-medium text-[#111827] transition-shadow duration-150 hover:shadow-md"
-                      >
-                        <LinkIcon className="size-3.5" />
-                        Copy Live Link
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleUnpublish}
-                        disabled={isBusy}
-                        className="inline-flex h-8 items-center gap-2 rounded-full border border-black/5 bg-white px-3 text-xs font-medium text-[#111827] transition-shadow duration-150 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        Unpublish
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {effectivePreviewUrl && !effectiveLiveUrl && (
-                  <div className="mb-3 flex flex-col gap-2 rounded-2xl bg-[#fbfaf8] px-4 py-3 text-sm text-[#6b7280] lg:flex-row lg:items-center lg:justify-between">
-                    <div>
-                      <p className="font-medium text-[#111827]">
-                        Publish to create a real live website URL.
-                      </p>
-                      <p className="mt-1 text-xs">
-                        Preview stays at /preview/projectId. Published sites use /site/website-slug.
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={handlePublish}
-                      disabled={isBusy || !currentProjectId}
-                      className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-full bg-[#111827] px-4 text-xs font-medium text-white transition-colors duration-150 hover:bg-black disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      {loadingAction === "publish" ? (
-                        <Loader2 className="size-3.5 animate-spin" />
-                      ) : (
-                        <ExternalLink className="size-3.5" />
-                      )}
-                      Publish Website
-                    </button>
-                  </div>
-                )}
-
-                {!effectivePreviewUrl && (
-                  <div className="mb-3 flex flex-col gap-2 rounded-2xl bg-[#fbfaf8] px-4 py-3 text-sm text-[#6b7280] lg:flex-row lg:items-center lg:justify-between">
-                    <div>
-                      <p className="font-medium text-[#111827]">
-                        Save first to get a public preview URL.
-                      </p>
-                      <p className="mt-1 text-xs">
-                        Preview links are created only after your website files
-                        are saved.
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={handleSave}
-                      disabled={isBusy}
-                      className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-full bg-[#111827] px-4 text-xs font-medium text-white transition-colors duration-150 hover:bg-black disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      <Save className="size-3.5" />
-                      Save Project
-                    </button>
-                  </div>
-                )}
-
-                <div className="flex flex-col gap-3 xl:flex-row xl:items-center">
-                  <input
-                    value={instruction}
-                    onChange={(event) => setInstruction(event.target.value)}
-                    className="h-10 flex-1 rounded-full border border-black/5 bg-[#fbfaf8] px-5 text-sm text-[#111827] outline-none transition-shadow duration-150 placeholder:text-[#9ca3af] focus:bg-white focus:shadow-[0_0_0_4px_rgba(37,99,235,0.10)]"
-                    placeholder="Ask AI to refine this website..."
-                  />
-                  <div className="flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={handleEdit}
-                      disabled={isBusy}
-                      className="inline-flex h-10 items-center gap-2 rounded-full bg-[#111827] px-4 text-sm font-medium text-white transition-colors duration-150 hover:bg-black disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      <Wand2 className="size-4" />
-                      Apply Edit
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleSave}
-                      disabled={isBusy}
-                      className="inline-flex h-10 items-center gap-2 rounded-full border border-black/5 bg-white px-4 text-sm font-medium text-[#111827] transition-shadow duration-150 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      <Save className="size-4" />
-                      Save
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleOpenLiveWebsite}
-                      disabled={!effectiveLiveUrl}
-                      title={
-                        effectiveLiveUrl
-                          ? "Open the published website"
-                          : "Publish the website first"
-                      }
-                      className={`inline-flex h-10 items-center gap-2 rounded-full px-4 text-sm font-medium transition-shadow duration-150 ${
-                        effectiveLiveUrl
-                          ? "bg-[#111827] text-white hover:bg-black"
-                          : "cursor-not-allowed border border-black/5 bg-white text-[#9ca3af]"
-                      }`}
-                    >
-                      <ExternalLink className="size-4" />
-                      View Published Site
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleCopyCode}
-                      className="inline-flex h-10 items-center gap-2 rounded-full border border-black/5 bg-white px-4 text-sm font-medium text-[#111827] transition-shadow duration-150 hover:shadow-md"
-                    >
-                      <Copy className="size-4" />
-                      Copy Code
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleReset}
-                      className="inline-flex h-10 items-center gap-2 rounded-full border border-black/5 bg-white px-4 text-sm font-medium text-[#111827] transition-shadow duration-150 hover:shadow-md"
-                    >
-                      <RotateCcw className="size-4" />
-                      Reset
-                    </button>
-                  </div>
-                </div>
               </div>
             </div>
-          )}
+          </div>
         </section>
       </div>
     </main>

@@ -1,12 +1,15 @@
 import { generateText } from "ai";
 import { groq } from "@ai-sdk/groq";
+import { applySectionEdit } from "@/lib/applySectionEdit";
 import { applySimpleEdit, hasSimpleEditSignal } from "@/lib/applySimpleEdit";
 import { ensureImagesInGeneratedCode } from "@/lib/fixBrokenImagePaths";
+import { normalizeEditInstruction } from "@/lib/normalizeEditInstruction";
 import { parseWebsiteResponse } from "@/lib/parseWebsiteResponse";
 import { safeInsert } from "@/lib/serverSupabase";
 import { validateWebsiteQuality } from "@/lib/validateWebsiteQuality";
 
-const AI_TIMEOUT_MS = 45000;
+const AI_TIMEOUT_MS = 25000;
+const SIMPLE_EDIT_MODEL = "llama-3.1-8b-instant";
 
 function findFile(files, acceptedPaths) {
   return files.find((file) => acceptedPaths.includes(file.path));
@@ -76,6 +79,44 @@ function countMatches(value = "", pattern) {
   return String(value).match(pattern)?.length || 0;
 }
 
+function getRetryAfterMinutes(error) {
+  const retryAfter =
+    error?.response?.headers?.get?.("retry-after") ||
+    error?.headers?.get?.("retry-after") ||
+    error?.retryAfter ||
+    "";
+  const seconds = Number(retryAfter);
+
+  if (Number.isFinite(seconds) && seconds > 0) {
+    return Math.max(1, Math.ceil(seconds / 60));
+  }
+
+  const text = `${error?.message || ""} ${error?.cause?.message || ""}`;
+  const minuteMatch = text.match(/try again in\s+(\d+(?:\.\d+)?)\s*m/i);
+  if (minuteMatch) {
+    return Math.max(1, Math.ceil(Number(minuteMatch[1])));
+  }
+
+  const secondMatch = text.match(/try again in\s+(\d+(?:\.\d+)?)\s*s/i);
+  if (secondMatch) {
+    return Math.max(1, Math.ceil(Number(secondMatch[1]) / 60));
+  }
+
+  return 0;
+}
+
+function isRateLimitError(error) {
+  const text = `${error?.message || ""} ${error?.cause?.message || ""}`.toLowerCase();
+  return error?.statusCode === 429 || error?.status === 429 || text.includes("rate limit");
+}
+
+function buildRateLimitMessage(error) {
+  const minutes = getRetryAfterMinutes(error);
+  return `AI edit limit reached. Your previous design was kept. Try again later or use a smaller edit.${
+    minutes ? ` Try again in about ${minutes} minute${minutes === 1 ? "" : "s"}.` : ""
+  }`;
+}
+
 function buildWebsiteFromCode(baseWebsite, appCode, cssCode) {
   return {
     ...baseWebsite,
@@ -97,6 +138,8 @@ function buildEditPrompt({
   templateVariant,
   designSeed,
   imageSetUsed,
+  editPlan,
+  editContext,
   validationErrors = [],
 }) {
   const validationBlock = validationErrors.length
@@ -139,11 +182,24 @@ ${Array.isArray(imageSetUsed) && imageSetUsed.length ? imageSetUsed.join("\n") :
 User edit instruction:
 ${instruction}
 
-Current App.js:
+Normalized edit plan:
+Type: ${editPlan?.editType || "unknown"}
+Target: ${editPlan?.target || "unknown"}
+Action: ${editPlan?.action || "unknown"}
+Constraints:
+${Array.isArray(editPlan?.constraints) ? editPlan.constraints.map((item) => `- ${item}`).join("\n") : "- Keep existing design style"}
+
+${editContext?.mode === "focused" ? `Focused App.js snippets:
+${editContext.appCode}
+
+Focused styles.css snippets:
+${editContext.cssCode}
+
+Only the most relevant snippets were included to reduce token usage. Preserve the existing website structure and return the full updated files using the same component names and design system.` : `Current App.js:
 ${appCode}
 
 Current styles.css:
-${cssCode}
+${cssCode}`}
 ${validationBlock}
 Return the FULL updated website, not a patch.
 Return the full updated App.js and styles.css.
@@ -164,6 +220,7 @@ Rules:
 - Do not explain anything
 - Do not return JSON
 - Keep all existing pages unless user asks to remove them
+- For section/page edits, update only the target section/page named in the normalized edit plan
 - Preserve the current template variant and design structure unless the user asks for a major redesign
 - Do not collapse the website back into a simple generic about/services template
 - Do not replace the premium template/layout with a new basic website
@@ -184,6 +241,101 @@ Rules:
 - No fake local images
 - Must define function App()
 - End App.js with export default App`;
+}
+
+function extractFunctionBlock(code = "", functionName = "") {
+  const start = code.search(new RegExp(`function\\s+${functionName}\\s*\\(`));
+  if (start < 0) return "";
+
+  const paramsStart = code.indexOf("(", start);
+  let parenDepth = 0;
+  let paramsEnd = -1;
+
+  for (let index = paramsStart; index < code.length; index += 1) {
+    if (code[index] === "(") parenDepth += 1;
+    if (code[index] === ")") parenDepth -= 1;
+    if (parenDepth === 0) {
+      paramsEnd = index;
+      break;
+    }
+  }
+
+  const braceStart = code.indexOf("{", paramsEnd);
+  if (braceStart < 0) return "";
+
+  let depth = 0;
+  for (let index = braceStart; index < code.length; index += 1) {
+    const char = code[index];
+    if (char === "{") depth += 1;
+    if (char === "}") depth -= 1;
+    if (depth === 0) {
+      return code.slice(start, index + 1);
+    }
+  }
+
+  return code.slice(start, Math.min(code.length, start + 5000));
+}
+
+function extractCssBlocks(cssCode = "", keywords = []) {
+  const blocks = [];
+  const pattern = /([^{}]+)\{([^{}]*)\}/g;
+  let match = pattern.exec(cssCode);
+
+  while (match) {
+    const block = `${match[1].trim()} {\n${match[2].trim()}\n}`;
+    const lower = block.toLowerCase();
+    if (keywords.some((keyword) => lower.includes(keyword))) {
+      blocks.push(block);
+    }
+    match = pattern.exec(cssCode);
+  }
+
+  return blocks.join("\n\n").slice(0, 9000);
+}
+
+function buildFocusedEditContext(appCode = "", cssCode = "", instruction = "", editPlan = null) {
+  const text = String(instruction || "").toLowerCase();
+  const targets = [
+    ["navbar", ["Navbar"], ["brand", "nav", "header", "site-header"]],
+    ["nav", ["Navbar"], ["brand", "nav", "header", "site-header"]],
+    ["hero", ["Hero"], ["hero", "eyebrow", "primary-button", "secondary-button", "stats"]],
+    ["footer", ["Footer"], ["footer", "site-footer"]],
+    ["pricing", ["PackagesPage", "PricingPage"], ["pricing", "package", "price"]],
+    ["packages", ["PackagesPage", "PricingPage"], ["pricing", "package", "price"]],
+    ["contact", ["ContactPage"], ["contact", "form"]],
+    ["services", ["ServicesPage"], ["services", "service-card"]],
+  ];
+  const planTarget = String(editPlan?.target || "").toLowerCase();
+  const planAction = String(editPlan?.action || "").toLowerCase();
+  const selected = targets.filter(
+    ([keyword]) =>
+      text.includes(keyword) || planTarget.includes(keyword) || planAction.includes(keyword),
+  );
+
+  if (!selected.length) {
+    return { mode: "full", appCode, cssCode };
+  }
+
+  const componentNames = [...new Set(selected.flatMap(([, components]) => components))];
+  const cssKeywords = [...new Set(selected.flatMap(([, , keywords]) => keywords))];
+  const snippets = componentNames
+    .map((name) => extractFunctionBlock(appCode, name))
+    .filter(Boolean);
+
+  if (!snippets.length) {
+    return { mode: "full", appCode, cssCode };
+  }
+
+  const globals = appCode
+    .slice(0, Math.min(appCode.indexOf("function App"), 4500))
+    .trim();
+  const appShell = extractFunctionBlock(appCode, "App");
+
+  return {
+    mode: "focused",
+    appCode: [globals, ...snippets, appShell].filter(Boolean).join("\n\n").slice(0, 14000),
+    cssCode: extractCssBlocks(cssCode, cssKeywords) || cssCode.slice(0, 9000),
+  };
 }
 
 function normalizeEditedWebsite(website, promptContext) {
@@ -310,9 +462,9 @@ function validateEditedWebsite(website, originalAppCode, originalCssCode, instru
   return errors;
 }
 
-async function runEditGeneration(prompt) {
+async function runEditGeneration(prompt, modelName = SIMPLE_EDIT_MODEL) {
   return generateText({
-    model: groq("llama-3.3-70b-versatile"),
+    model: groq(modelName),
     prompt,
     temperature: 0.25,
     abortSignal: AbortSignal.timeout(AI_TIMEOUT_MS),
@@ -391,8 +543,17 @@ export async function POST(request) {
 
     const currentCategory = category || websiteType || "";
     const sourcePrompt = originalPrompt || prompt || "";
-    const promptContext = `${sourcePrompt}\n${currentCategory}\n${templateVariant || ""}\n${designSeed || ""}\n${instruction}`;
-    const simpleEdit = applySimpleEdit(appCode, cssCode, instruction);
+    const editPlan = normalizeEditInstruction(instruction, {
+      category: currentCategory,
+      templateVariant,
+      designSeed,
+      currentTitle,
+    });
+    console.log("Raw instruction:", instruction);
+    console.log("Normalized edit plan:", editPlan);
+    const normalizedInstruction = editPlan.normalizedInstruction || instruction;
+    const promptContext = `${sourcePrompt}\n${currentCategory}\n${templateVariant || ""}\n${designSeed || ""}\n${normalizedInstruction}`;
+    const simpleEdit = applySimpleEdit(appCode, cssCode, normalizedInstruction);
 
     if (simpleEdit.changed) {
       let website = buildWebsiteFromCode(
@@ -405,7 +566,7 @@ export async function POST(request) {
         website,
         appCode,
         cssCode,
-        instruction,
+        normalizedInstruction,
       );
       const quality = validateWebsiteQuality({
         ...getWebsiteCode(website),
@@ -420,7 +581,7 @@ export async function POST(request) {
         };
         const editLogId = await logEdit({
           projectId,
-          instruction: instruction.trim(),
+          instruction: `${instruction.trim()}\n\nNormalized: ${normalizedInstruction}`,
           currentFiles,
           website,
           validation,
@@ -429,7 +590,75 @@ export async function POST(request) {
 
         return Response.json({
           ...website,
-          message: simpleEdit.message,
+          message:
+            simpleEdit.message ||
+            `Applied: ${editPlan.action || normalizedInstruction}.`,
+          editPlan,
+          editLogId,
+          qualityScore: validation.score,
+          validationErrors: validation.errors,
+          category: currentCategory,
+          templateVariant: templateVariant || "",
+          designSeed: designSeed || "",
+          imageSetUsed: Array.isArray(imageSetUsed) ? imageSetUsed : [],
+        });
+      }
+    }
+
+    const sectionEdit = applySectionEdit(appCode, cssCode, editPlan);
+
+    if (sectionEdit.changed) {
+      let website = buildWebsiteFromCode(
+        { title: currentTitle || "Updated website" },
+        sectionEdit.appCode,
+        sectionEdit.cssCode,
+      );
+      website = normalizeEditedWebsite(website, promptContext);
+      const structureErrors = validateEditedWebsite(
+        website,
+        appCode,
+        cssCode,
+        normalizedInstruction,
+      );
+      const { appCode: sectionAppCode, cssCode: sectionCssCode } = getWebsiteCode(website);
+      const sectionErrors = [];
+
+      if (!/function\s+App\s*\(/.test(sectionAppCode)) {
+        sectionErrors.push("App.js must define function App().");
+      }
+
+      if (!/export\s+default\s+App\s*;?/.test(sectionAppCode)) {
+        sectionErrors.push("App.js must end with export default App.");
+      }
+
+      for (const packageName of ["Starter", "Growth", "Premium"]) {
+        if (!sectionAppCode.includes(packageName)) {
+          sectionErrors.push(`Pricing package ${packageName} is missing.`);
+        }
+      }
+
+      if (!/\.pricing-section\b/.test(sectionCssCode)) {
+        sectionErrors.push("Pricing CSS classes are missing.");
+      }
+
+      if (![...structureErrors, ...sectionErrors].length) {
+        const validation = {
+          score: 95,
+          errors: [],
+        };
+        const editLogId = await logEdit({
+          projectId,
+          instruction: `${instruction.trim()}\n\nNormalized: ${normalizedInstruction}`,
+          currentFiles,
+          website,
+          validation,
+          success: true,
+        });
+
+        return Response.json({
+          ...website,
+          message: sectionEdit.message || "Pricing added to Services page.",
+          editPlan,
           editLogId,
           qualityScore: validation.score,
           validationErrors: validation.errors,
@@ -446,14 +675,22 @@ export async function POST(request) {
         {
           error:
             "Groq is not configured yet. Add GROQ_API_KEY to .env.local. Simple deterministic edits were attempted first but this instruction needs AI.",
+          message:
+            "I couldn't apply that edit locally. Try a smaller edit or choose a specific section.",
         },
         { status: 500 },
       );
     }
 
+    const focusedContext = buildFocusedEditContext(
+      appCode,
+      cssCode,
+      normalizedInstruction,
+      editPlan,
+    );
     const firstPrompt = buildEditPrompt({
       currentTitle,
-      instruction: instruction.trim(),
+      instruction: normalizedInstruction,
       appCode,
       cssCode,
       prompt: sourcePrompt,
@@ -462,9 +699,11 @@ export async function POST(request) {
       templateVariant,
       designSeed,
       imageSetUsed,
+      editPlan,
+      editContext: focusedContext,
     });
 
-    let result = await runEditGeneration(firstPrompt);
+    let result = await runEditGeneration(firstPrompt, SIMPLE_EDIT_MODEL);
     console.log("Raw edit response:", result.text);
     let website = parseWebsiteResponse(result.text);
 
@@ -474,7 +713,7 @@ export async function POST(request) {
       result = await runEditGeneration(
         buildEditPrompt({
           currentTitle,
-          instruction: instruction.trim(),
+          instruction: normalizedInstruction,
           appCode,
           cssCode,
           prompt: sourcePrompt,
@@ -483,10 +722,16 @@ export async function POST(request) {
           templateVariant,
           designSeed,
           imageSetUsed,
+          editPlan,
+          editContext:
+            focusedContext.mode === "focused"
+              ? { mode: "full", appCode, cssCode }
+              : focusedContext,
           validationErrors: [
-            "The response could not be parsed. Return only TITLE, ---APP_JS---, and ---STYLES_CSS--- separators.",
+          "The response could not be parsed. Return only TITLE, ---APP_JS---, and ---STYLES_CSS--- separators.",
           ],
         }),
+        SIMPLE_EDIT_MODEL,
       );
       console.log("Raw edit response:", result.text);
       website = parseWebsiteResponse(result.text);
@@ -505,7 +750,7 @@ export async function POST(request) {
       website,
       appCode,
       cssCode,
-      instruction,
+      normalizedInstruction,
     );
     let quality = validateWebsiteQuality({
       ...getWebsiteCode(website),
@@ -522,7 +767,7 @@ export async function POST(request) {
       result = await runEditGeneration(
         buildEditPrompt({
           currentTitle,
-          instruction: instruction.trim(),
+          instruction: normalizedInstruction,
           appCode,
           cssCode,
           prompt: sourcePrompt,
@@ -531,8 +776,11 @@ export async function POST(request) {
           templateVariant,
           designSeed,
           imageSetUsed,
+          editPlan,
+          editContext: { mode: "full", appCode, cssCode },
           validationErrors: retryIssues,
         }),
+        SIMPLE_EDIT_MODEL,
       );
       console.log("Raw edit response:", result.text);
 
@@ -544,7 +792,7 @@ export async function POST(request) {
           website,
           appCode,
           cssCode,
-          instruction,
+          normalizedInstruction,
         );
         quality = validateWebsiteQuality({
           ...getWebsiteCode(website),
@@ -561,17 +809,18 @@ export async function POST(request) {
     }
 
     if (
-      (isHeroHeadlineBlackEdit(instruction) || isHeroHeadlineFontSizeEdit(instruction)) &&
+      (isHeroHeadlineBlackEdit(normalizedInstruction) ||
+        isHeroHeadlineFontSizeEdit(normalizedInstruction)) &&
       !hasSimpleEditSignal(
         getWebsiteCode(website).appCode,
         getWebsiteCode(website).cssCode,
-        instruction,
+        normalizedInstruction,
       )
     ) {
       const patchedCode = applySimpleEdit(
         getWebsiteCode(website).appCode,
         getWebsiteCode(website).cssCode,
-        instruction,
+        normalizedInstruction,
       );
 
       if (patchedCode.changed) {
@@ -584,7 +833,7 @@ export async function POST(request) {
           website,
           appCode,
           cssCode,
-          instruction,
+          normalizedInstruction,
         );
         quality = validateWebsiteQuality({
           ...getWebsiteCode(website),
@@ -602,7 +851,7 @@ export async function POST(request) {
           details: validationErrors,
           message:
             validationErrors[0] ||
-            "The edit did not preserve the required website structure.",
+            "I couldn't apply that edit. Try a smaller edit or choose a specific section.",
         },
         { status: 502 },
       );
@@ -614,7 +863,7 @@ export async function POST(request) {
     };
     const editLogId = await logEdit({
       projectId,
-      instruction: instruction.trim(),
+      instruction: `${instruction.trim()}\n\nNormalized: ${normalizedInstruction}`,
       currentFiles,
       website,
       validation,
@@ -626,20 +875,33 @@ export async function POST(request) {
       editLogId,
       qualityScore: validation.score,
       validationErrors: validation.errors,
+      message: `Applied: ${editPlan.action || normalizedInstruction}.`,
+      editPlan,
       category: currentCategory,
       templateVariant: templateVariant || "",
       designSeed: designSeed || "",
       imageSetUsed: Array.isArray(imageSetUsed) ? imageSetUsed : [],
     });
   } catch (error) {
+    if (isRateLimitError(error)) {
+      return Response.json(
+        {
+          error: buildRateLimitMessage(error),
+          message: buildRateLimitMessage(error),
+          retryAfterMinutes: getRetryAfterMinutes(error),
+        },
+        { status: 429 },
+      );
+    }
+
     return Response.json(
       {
         error:
           error.name === "TimeoutError"
-            ? "Groq took too long to respond. Please try a smaller edit."
+            ? "This edit is too large for AI right now. I kept your previous design. Try editing one section at a time."
             : error.message?.includes("Cannot connect to API")
-              ? "Could not connect to the Groq API. Check your internet connection, API key, and Groq API access."
-              : error.message || "Groq could not edit the website.",
+              ? "I could not connect to the AI editor. Your previous design was kept. Please try again shortly."
+              : "I couldn't apply that edit. Try a smaller edit or choose a specific section.",
       },
       { status: 500 },
     );
