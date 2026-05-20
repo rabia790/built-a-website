@@ -267,7 +267,7 @@ export default function Home() {
   }
 
   async function handleEdit() {
-    console.log("Apply edit clicked");
+    console.log("Apply Edit clicked");
     setError("");
     setNotice("");
 
@@ -301,7 +301,7 @@ export default function Home() {
     const previousFiles = project.files;
     const editInstruction = instruction.trim();
 
-    console.log("Edit instruction:", editInstruction);
+    console.log("Instruction:", editInstruction);
     console.log("Files before edit:", previousFiles);
 
     setLoadingAction("edit");
@@ -347,7 +347,12 @@ export default function Home() {
       console.log("Edit API response:", data);
 
       if (!response.ok) {
-        throw new Error(data.error || "Failed to apply edit");
+        const details = Array.isArray(data.details) ? data.details.join(" ") : "";
+        throw new Error(
+          [data.message, data.error, details, "Your previous design was kept."]
+            .filter(Boolean)
+            .join(" "),
+        );
       }
 
       const nextFiles = Array.isArray(data.files) ? data.files : [];
@@ -390,15 +395,10 @@ export default function Home() {
     } catch (err) {
       setProject(previousProject);
       setPreviewVersion((value) => value + 1);
-      const validationFailure = /not applied|did not preserve|validation|requested change/i.test(
-        err.message || "",
-      );
       setError(
-        validationFailure
-          ? "Edit failed. The requested change was not applied, so your previous design was kept."
-          : `Edit failed. Your previous design was kept.${
-              err.message ? ` ${err.message}` : ""
-            }`,
+        err.message
+          ? `Edit failed. ${err.message}`
+          : "Edit failed. Your previous design was kept.",
       );
     } finally {
       setLoadingAction("");

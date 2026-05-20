@@ -62,6 +62,20 @@ function isHeroHeadlineFontSizeEdit(instruction = "") {
   );
 }
 
+function isLogoEdit(instruction = "") {
+  const text = String(instruction || "").toLowerCase();
+  return (
+    /(logo|icon|brand mark|brand name|navbar brand|mark)/i.test(text) &&
+    /(make|add|create|include|show|fix|repair|logo|icon|overlap|overlapping|unreadable)/i.test(
+      text,
+    )
+  );
+}
+
+function countMatches(value = "", pattern) {
+  return String(value).match(pattern)?.length || 0;
+}
+
 function buildWebsiteFromCode(baseWebsite, appCode, cssCode) {
   return {
     ...baseWebsite,
@@ -101,6 +115,7 @@ Apply only the requested edit.
 If the user asks to change a color, update the relevant className or CSS rule.
 If the user asks to change font size, update the relevant className or CSS rule.
 If the instruction says hero headline, find the main hero h1 text and update its color.
+If the user asks for a logo icon, add a premium inline SVG mark or styled monogram next to the brand name in the navbar. Do not generate image files.
 Prefer stable editable targets such as data-edit-id="hero-headline" and CSS variables such as --hero-headline-size and --hero-headline-color.
 
 Current title:
@@ -267,6 +282,31 @@ function validateEditedWebsite(website, originalAppCode, originalCssCode, instru
     }
   }
 
+  if (isLogoEdit(instruction)) {
+    const logoCount = countMatches(appCode, /data-edit-id="brand-logo"/g);
+    const brandNameCount = countMatches(appCode, /data-edit-id="brand-name"/g);
+    const logoClassCount = countMatches(
+      appCode,
+      /className="[^"]*\bbrand-logo-mark\b[^"]*"/g,
+    );
+
+    if (logoCount !== 1) {
+      errors.push("Navbar brand must contain exactly one logo mark.");
+    }
+
+    if (brandNameCount !== 1) {
+      errors.push("Navbar brand must contain exactly one brand name.");
+    }
+
+    if (logoClassCount !== 1) {
+      errors.push("Navbar brand logo must use one .brand-logo-mark element.");
+    }
+
+    if (!/className="[^"]*\bbrand-name\b[^"]*"/.test(appCode)) {
+      errors.push("Navbar brand name must keep the .brand-name class.");
+    }
+  }
+
   return errors;
 }
 
@@ -305,15 +345,6 @@ async function logEdit({
 }
 
 export async function POST(request) {
-  if (!process.env.GROQ_API_KEY?.trim()) {
-    return Response.json(
-      {
-        error: "Groq is not configured yet. Add GROQ_API_KEY to .env.local.",
-      },
-      { status: 500 },
-    );
-  }
-
   try {
     const {
       instruction,
@@ -408,6 +439,16 @@ export async function POST(request) {
           imageSetUsed: Array.isArray(imageSetUsed) ? imageSetUsed : [],
         });
       }
+    }
+
+    if (!process.env.GROQ_API_KEY?.trim()) {
+      return Response.json(
+        {
+          error:
+            "Groq is not configured yet. Add GROQ_API_KEY to .env.local. Simple deterministic edits were attempted first but this instruction needs AI.",
+        },
+        { status: 500 },
+      );
     }
 
     const firstPrompt = buildEditPrompt({
@@ -557,7 +598,9 @@ export async function POST(request) {
       const validationErrors = [...structureErrors, ...quality.errors];
       return Response.json(
         {
-          error:
+          error: "Edit failed validation",
+          details: validationErrors,
+          message:
             validationErrors[0] ||
             "The edit did not preserve the required website structure.",
         },
