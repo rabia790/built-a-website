@@ -11,6 +11,9 @@ const requestSchema = z.object({
   title: z.string().min(1),
   prompt: z.string().min(1),
   category: z.string().optional(),
+  templateVariant: z.string().optional(),
+  editInstruction: z.string().optional(),
+  resultLabel: z.string().optional(),
   files: z.array(fileSchema).min(1),
 });
 
@@ -33,6 +36,10 @@ export async function POST(request) {
 
     const { error } = await serverSupabase.from("template_examples").insert({
       category,
+      template_variant: body.templateVariant || null,
+      original_prompt: body.prompt,
+      edit_instruction: body.editInstruction || null,
+      result_label: body.resultLabel || "featured",
       title: body.title,
       prompt: body.prompt,
       app_code: getFile(body.files, "/App.js"),

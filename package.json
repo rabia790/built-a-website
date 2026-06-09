@@ -7,7 +7,8 @@
     "dev:3001": "next dev -p 3001",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test:edits": "node scripts/edit-engine-tests.mjs"
   },
   "dependencies": {
     "@ai-sdk/groq": "^3.0.39",

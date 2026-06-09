@@ -87,6 +87,10 @@ create table if not exists public.edit_logs (
 create table if not exists public.template_examples (
   id uuid primary key default gen_random_uuid(),
   category text,
+  template_variant text,
+  original_prompt text,
+  edit_instruction text,
+  result_label text,
   title text,
   prompt text,
   app_code text,
@@ -95,6 +99,12 @@ create table if not exists public.template_examples (
   is_featured boolean not null default false,
   created_at timestamptz not null default now()
 );
+
+alter table public.template_examples
+  add column if not exists template_variant text,
+  add column if not exists original_prompt text,
+  add column if not exists edit_instruction text,
+  add column if not exists result_label text;
 
 create table if not exists public.custom_domains (
   id uuid primary key default gen_random_uuid(),

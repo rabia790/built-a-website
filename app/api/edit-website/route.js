@@ -463,6 +463,16 @@ function validateEditedWebsite(website, originalAppCode, originalCssCode, instru
 }
 
 async function runEditGeneration(prompt, modelName = SIMPLE_EDIT_MODEL) {
+  const estimatedTokens = Math.ceil(String(prompt || "").length / 4);
+
+  if (estimatedTokens > 5000) {
+    const error = new Error(
+      "This edit needs AI but the request is too large. Break it into smaller edits or ask for a full redesign.",
+    );
+    error.code = "TOKEN_GUARD";
+    throw error;
+  }
+
   return generateText({
     model: groq(modelName),
     prompt,
@@ -554,6 +564,23 @@ export async function POST(request) {
     const normalizedInstruction = editPlan.normalizedInstruction || instruction;
     const promptContext = `${sourcePrompt}\n${currentCategory}\n${templateVariant || ""}\n${designSeed || ""}\n${normalizedInstruction}`;
     const simpleEdit = applySimpleEdit(appCode, cssCode, normalizedInstruction);
+    console.log("Simple edit result:", simpleEdit);
+    console.log(
+      "Target text found:",
+      simpleEdit.targetText ? appCode.includes(simpleEdit.targetText) : "",
+    );
+
+    if (simpleEdit.failed) {
+      return Response.json(
+        {
+          error: simpleEdit.error || "I couldn't apply that edit locally.",
+          message: simpleEdit.error || "I couldn't apply that edit locally.",
+          details: simpleEdit.details || [simpleEdit.error].filter(Boolean),
+          editPlan,
+        },
+        { status: 400 },
+      );
+    }
 
     if (simpleEdit.changed) {
       let website = buildWebsiteFromCode(
@@ -605,7 +632,24 @@ export async function POST(request) {
       }
     }
 
-    const sectionEdit = applySectionEdit(appCode, cssCode, editPlan);
+    const sectionEdit = applySectionEdit(appCode, cssCode, {
+      ...editPlan,
+      category: currentCategory,
+      websiteType,
+      templateVariant,
+    });
+
+    if (sectionEdit.failed) {
+      return Response.json(
+        {
+          error: sectionEdit.message || "I couldn't apply that section edit locally.",
+          message: sectionEdit.message || "I couldn't apply that section edit locally.",
+          details: [sectionEdit.message || "The deterministic section edit failed."],
+          editPlan,
+        },
+        { status: 400 },
+      );
+    }
 
     if (sectionEdit.changed) {
       let website = buildWebsiteFromCode(
@@ -631,13 +675,16 @@ export async function POST(request) {
         sectionErrors.push("App.js must end with export default App.");
       }
 
-      for (const packageName of ["Starter", "Growth", "Premium"]) {
+      for (const packageName of sectionEdit.requiredTerms || []) {
         if (!sectionAppCode.includes(packageName)) {
           sectionErrors.push(`Pricing package ${packageName} is missing.`);
         }
       }
 
-      if (!/\.pricing-section\b/.test(sectionCssCode)) {
+      if (
+        (sectionEdit.requiredTerms || []).length > 0 &&
+        !/(\.pricing-section\b|\.packages-page\b|\.package-card\b)/.test(sectionCssCode)
+      ) {
         sectionErrors.push("Pricing CSS classes are missing.");
       }
 
@@ -891,6 +938,17 @@ export async function POST(request) {
           retryAfterMinutes: getRetryAfterMinutes(error),
         },
         { status: 429 },
+      );
+    }
+
+    if (error.code === "TOKEN_GUARD") {
+      return Response.json(
+        {
+          error: error.message,
+          message: error.message,
+          details: [error.message],
+        },
+        { status: 413 },
       );
     }
 

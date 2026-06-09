@@ -92,6 +92,9 @@ export default function WebsitePreview({
   viewMode = "preview",
   onCopyCode,
   previewVersion = 0,
+  device = "desktop",
+  fill = false,
+  zoom = "Fit",
 }) {
   const [activeTab, setActiveTab] = useState("app");
   const { appCode, cssCode } = useMemo(() => getGeneratedCode(files), [files]);
@@ -103,6 +106,22 @@ export default function WebsitePreview({
       `${title || "preview"}-${previewVersion}-${appCode.length}-${cssCode.length}`,
     [appCode, cssCode, previewVersion, title],
   );
+  const previewWidthClass =
+    device === "mobile"
+      ? "max-w-[390px]"
+      : device === "tablet"
+        ? "max-w-[820px]"
+        : "max-w-[1440px]";
+  const zoomScale = zoom === "75%" ? 0.75 : 1;
+  const frameStyle =
+    zoomScale === 1
+      ? undefined
+      : {
+          transform: `scale(${zoomScale})`,
+          transformOrigin: "top center",
+          width: `${100 / zoomScale}%`,
+          height: `${100 / zoomScale}%`,
+        };
 
   function handlePreviewLoad() {
     try {
@@ -113,16 +132,19 @@ export default function WebsitePreview({
   }
 
   return (
-    <section className="min-w-0">
+    <section className={fill ? "flex h-full min-h-0 min-w-0 overflow-auto" : "min-w-0"}>
       {viewMode === "preview" ? (
-        <div className="mx-auto max-w-[1440px] overflow-hidden rounded-[1.25rem] border border-black/5 bg-white/85 shadow-[0_20px_58px_rgba(42,31,18,0.12)] ring-1 ring-white/70 backdrop-blur">
-            <div className="flex h-8 items-center justify-between border-b border-black/5 bg-[#fbfaf8] px-4">
+        <div
+          style={frameStyle}
+          className={`mx-auto ${previewWidthClass} ${fill ? "flex h-full min-h-0 flex-1 flex-col" : ""} overflow-hidden rounded-xl border border-[#e1ddd4] bg-white shadow-[0_14px_36px_rgba(15,23,42,0.09)] transition-all duration-200`}
+        >
+            <div className="flex h-7 items-center justify-between border-b border-[#ece7df] bg-[#fbfaf7] px-3">
               <div className="flex items-center gap-2">
-                <span className="size-2.5 rounded-full bg-[#ef4444]" />
-                <span className="size-2.5 rounded-full bg-[#f59e0b]" />
-                <span className="size-2.5 rounded-full bg-[#10b981]" />
+                <span className="size-2 rounded-full bg-[#ef4444]" />
+                <span className="size-2 rounded-full bg-[#f59e0b]" />
+                <span className="size-2 rounded-full bg-[#10b981]" />
               </div>
-              <div className="max-w-[55%] truncate rounded-full border border-black/5 bg-white/90 px-3 py-1 text-center text-[11px] text-[#6b7280] shadow-sm">
+              <div className="max-w-[55%] truncate rounded-md border border-[#ece7df] bg-white px-3 py-0.5 text-center text-[10px] font-medium text-[#6b7280]">
                 {title || "Generated website"}
               </div>
               <div className="w-16" />
@@ -134,12 +156,12 @@ export default function WebsitePreview({
               srcDoc={srcDoc}
               sandbox="allow-scripts allow-same-origin"
               onLoad={handlePreviewLoad}
-              className="h-[calc(100vh-220px)] min-h-[520px] w-full bg-white opacity-100 transition-opacity duration-150"
+              className={`${fill ? "min-h-0 flex-1" : "h-[calc(100vh-214px)] min-h-[540px]"} w-full bg-white opacity-100 transition-opacity duration-150`}
             />
         </div>
       ) : (
-        <div className="overflow-hidden rounded-2xl border border-black/5 bg-[#0f172a] shadow-[0_24px_70px_rgba(42,31,18,0.14)]">
-          <div className="flex items-center justify-between border-b border-slate-700 bg-slate-900 px-4">
+        <div className={`${fill ? "flex h-full min-h-0 flex-1 flex-col" : ""} overflow-hidden rounded-xl border border-slate-800 bg-[#0f172a] shadow-[0_18px_50px_rgba(15,23,42,0.18)]`}>
+          <div className="flex items-center justify-between border-b border-slate-800 bg-slate-950 px-4">
             <div className="flex">
               <button
                 type="button"
@@ -173,7 +195,7 @@ export default function WebsitePreview({
               Copy code
             </button>
           </div>
-          <pre className="h-[calc(100vh-220px)] min-h-[520px] overflow-auto p-5 text-sm leading-6 text-slate-100">
+          <pre className={`${fill ? "min-h-0 flex-1" : "h-[calc(100vh-214px)] min-h-[540px]"} overflow-auto p-5 text-sm leading-6 text-slate-100`}>
             <code>{activeCode}</code>
           </pre>
         </div>
